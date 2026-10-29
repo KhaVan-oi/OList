@@ -11,28 +11,16 @@ import pandas as pd
 BASE_DIR = Path(__file__).resolve().parent
 load_dotenv(BASE_DIR / ".env")
 
-def _env(key: str, default: str = "") -> str:
-    """Đọc biến môi trường; bỏ ngoặc kép/đơn nếu .env bọc giá trị."""
-    value = os.getenv(key, default)
-    if value is None:
-        return default
-    value = value.strip()
-    if len(value) >= 2 and value[0] == value[-1] and value[0] in {"'", '"'}:
-        value = value[1:-1]
-    return value
-
-
 def get_db_config(target_db: str | None = None) -> dict:
     """
     Get database connection configuration from environment variables.
-    Mặc định khớp PostgreSQL 17 local: localhost:5435 / olist_dw.
     """
     return {
-        "host": _env("DB_HOST", "localhost"),
-        "port": int(_env("DB_PORT", "5435")),
-        "database": target_db or _env("DB_NAME", "olist_dw"),
-        "user": _env("DB_USER", "postgres"),
-        "password": _env("DB_PASSWORD", ""),
+        "host": os.getenv("DB_HOST", "localhost"),
+        "port": int(os.getenv("DB_PORT", "5432")),
+        "database": target_db or os.getenv("DB_NAME", "olist_dw"),
+        "user": os.getenv("DB_USER", "postgres"),
+        "password": os.getenv("DB_PASSWORD", ""),
     }
 
 def get_connection(target_db: str | None = None, autocommit: bool = False):
@@ -55,16 +43,8 @@ def get_engine(target_db: str | None = None):
     """
     Get a SQLAlchemy engine for the database.
     """
-    from urllib.parse import quote_plus
-    from sqlalchemy import create_engine
-
     config = get_db_config(target_db)
-    user = quote_plus(config["user"])
-    password = quote_plus(config["password"])
-    url = (
-        f"postgresql+psycopg2://{user}:{password}"
-        f"@{config['host']}:{config['port']}/{config['database']}"
-    )
+    url = f"postgresql+psycopg2://{config['user']}:{config['password']}@{config['host']}:{config['port']}/{config['database']}"
     return create_engine(url)
 
 def ensure_database_exists(target_db: str = "olist_dw") -> bool:
@@ -135,7 +115,7 @@ def test_connection():
         print("\n[TIP] Check if:")
         print("  1. PostgreSQL service is running.")
         print("  2. DB_PASSWORD in .env is correct.")
-        print("  3. DB_PORT in .env matches pgAdmin (this project uses 5435 for PostgreSQL 17).")
+        print("  3. DB_PORT is 5432 (or matches your PostgreSQL installation).")
         return False
 
 def query_df(sql: str, params: tuple | None = None) -> pd.DataFrame:
