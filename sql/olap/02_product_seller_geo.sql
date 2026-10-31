@@ -3,18 +3,20 @@
 --
 -- CTE không giữ qua nhiều câu trong PostgreSQL, nên dùng TEMP VIEW
 -- làm nền chung (cùng nghĩa với CTE valid_sales trong bản mô tả).
+--
+-- orders = count(DISTINCT order_id) của đúng nhóm trên dòng đó.
+-- Không cộng cột orders xuyên seller hoặc xuyên danh mục: một đơn có thể có
+-- nhiều seller và nhiều danh mục. Cộng orders theo bang thì được, vì một đơn
+-- chỉ một customer_state. ROLLUP tính lại distinct ở từng mức, không cộng
+-- số đơn của các dòng con.
 
 DROP VIEW IF EXISTS valid_sales;
 
 CREATE TEMP VIEW valid_sales AS
 SELECT
     s.order_id,
-    s.order_item_id,
     s.price,
     s.freight_value,
-    s.purchase_date_key,
-    s.product_key,
-    s.seller_key,
     p.product_id,
     COALESCE(
         p.product_category_name_english,
@@ -22,9 +24,14 @@ SELECT
         'Unknown'
     ) AS category,
     sel.seller_id,
+    -- Địa chỉ của từng đơn, không lấy từ dim_customer.
+    -- dim_customer là 1 dòng / customer_unique_id. Có khách đặt nhiều đơn
+    -- về nhiều thành phố, nhiều bang. Gắn city/state lên dim khách sẽ còn
+    -- một địa chỉ và gán nhầm doanh thu các đơn cũ.
     o.customer_state,
     o.customer_city
 FROM dw.fact_sales AS s
+-- order_id là khóa fact đơn: mỗi dòng bán khớp đúng một đơn, sum(price) không bị nhân.
 JOIN dw.fact_customer_order AS o ON o.order_id = s.order_id
 JOIN dw.dim_product AS p ON p.product_key = s.product_key
 JOIN dw.dim_seller AS sel ON sel.seller_key = s.seller_key
@@ -44,6 +51,7 @@ FROM valid_sales;
 
 -- =============================================================================
 -- 1) Top 10 danh mục theo doanh thu
+--    orders đúng trên từng danh mục. Không cộng cột này giữa các danh mục.
 -- =============================================================================
 SELECT
     category,
@@ -58,6 +66,7 @@ LIMIT 10;
 
 -- =============================================================================
 -- 2) Top 10 seller theo doanh thu
+--    orders đúng trên từng seller. Cộng 10 dòng sẽ đếm trùng đơn có nhiều seller.
 -- =============================================================================
 SELECT
     seller_id,
@@ -124,6 +133,7 @@ FROM valid_sales;
 
 -- =============================================================================
 -- 5) Số đơn và doanh thu theo bang
+--    Cộng orders các bang = tổng đơn, vì mỗi đơn chỉ một customer_state.
 -- =============================================================================
 SELECT
     customer_state,
@@ -132,12 +142,14 @@ SELECT
     count(*) AS items_sold
 FROM valid_sales
 GROUP BY customer_state
-ORDER BY sum(price) DESC, count(DISTINCT order_id) DESC, customer_state;
+ORDER BY sum(price) DESC, count(*) DESC, customer_state;
 
 
 -- =============================================================================
 -- 6) ROLL-UP: thành phố -> bang -> toàn bộ
 --    grouping_state/city = 1 là dòng tổng của mức đó
+--    orders ở dòng tổng được tính lại bằng count(DISTINCT), không phải cộng
+--    orders của các thành phố phía dưới.
 -- =============================================================================
 SELECT
     CASE
@@ -164,62 +176,101 @@ ORDER BY
 
 
 -- =============================================================================
--- 7) DRILL-DOWN: 1 bang doanh thu cao nhất -> danh mục trong bang đó
+-- 7) DRILL-DOWN (ngược roll-up, cùng hierarchy địa lý)
+--     Nấc 1: toàn bộ → Nấc 2: các bang → Nấc 3: thành phố của mọi bang
 -- =============================================================================
-WITH top_state AS (
-    SELECT customer_state
-    FROM valid_sales
-    WHERE customer_state IS NOT NULL
-    GROUP BY customer_state
-    ORDER BY sum(price) DESC, count(*) DESC, customer_state
-    LIMIT 1
-)
+
+-- 7a) Nấc 1 — toàn bộ
 SELECT
-    v.customer_state,
+    '(ALL)' AS geo_level,
+    round(sum(price), 2) AS revenue,
+    count(*) AS items_sold,
+    count(DISTINCT order_id) AS orders
+FROM valid_sales;
+
+-- 7b) Nấc 2 — xuống các bang
+--     Cùng tập và cùng thứ tự với câu 5: mỗi đơn chỉ một bang.
+SELECT
+    customer_state,
+    round(sum(price), 2) AS revenue,
+    count(*) AS items_sold,
+    count(DISTINCT order_id) AS orders
+FROM valid_sales
+WHERE customer_state IS NOT NULL
+GROUP BY customer_state
+ORDER BY sum(price) DESC, count(*) DESC, customer_state;
+
+-- 7c) Nấc 3 — xuống thành phố của mọi bang (đủ chiều ngược roll-up)
+SELECT
+    customer_state,
+    coalesce(customer_city, '(NULL CITY)') AS customer_city,
+    round(sum(price), 2) AS revenue,
+    count(*) AS items_sold,
+    count(DISTINCT order_id) AS orders
+FROM valid_sales
+WHERE customer_state IS NOT NULL
+GROUP BY customer_state, customer_city
+ORDER BY
+    customer_state,
+    sum(price) DESC,
+    count(*) DESC,
+    customer_city;
+
+
+-- =============================================================================
+-- Tham số slice / dice. Sửa INSERT rồi chạy lại file để cắt lát khác.
+-- Mặc định là lát đã chốt cho slide:
+--   slice: 1 danh mục (health_beauty = danh mục doanh thu cao nhất)
+--   dice:  top 10 seller toàn kho ∩ SP/RJ/MG ∩ health_beauty
+-- olap_dice_seller đổ trước, cùng thứ tự với câu 2.
+-- Câu 8 và 9 chỉ giao các tập này, không xếp hạng lại.
+-- Một dòng olap_slice_category = một slice. Nhiều dòng = nhiều danh mục.
+-- =============================================================================
+DROP TABLE IF EXISTS olap_slice_category;
+CREATE TEMP TABLE olap_slice_category (category text PRIMARY KEY);
+INSERT INTO olap_slice_category (category) VALUES ('health_beauty');
+
+DROP TABLE IF EXISTS olap_dice_category;
+CREATE TEMP TABLE olap_dice_category (category text PRIMARY KEY);
+INSERT INTO olap_dice_category (category) VALUES ('health_beauty');
+
+DROP TABLE IF EXISTS olap_dice_state;
+CREATE TEMP TABLE olap_dice_state (customer_state char(2) PRIMARY KEY);
+INSERT INTO olap_dice_state (customer_state) VALUES ('SP'), ('RJ'), ('MG');
+
+DROP TABLE IF EXISTS olap_dice_seller;
+CREATE TEMP TABLE olap_dice_seller (seller_id text PRIMARY KEY);
+INSERT INTO olap_dice_seller (seller_id)
+SELECT seller_id
+FROM valid_sales
+GROUP BY seller_id
+ORDER BY sum(price) DESC, count(*) DESC, seller_id
+LIMIT 10;
+
+
+-- =============================================================================
+-- 8) SLICE: danh mục trong olap_slice_category
+--    Seller bị cộng gộp, mặt cắt còn lại là bang. Trong một danh mục, cộng
+--    orders theo bang được vì mỗi đơn chỉ một bang.
+-- =============================================================================
+SELECT
     v.category,
+    v.customer_state,
     round(sum(v.price), 2) AS revenue,
     count(*) AS items_sold,
     count(DISTINCT v.order_id) AS orders
 FROM valid_sales AS v
-JOIN top_state AS t ON t.customer_state = v.customer_state
-GROUP BY v.customer_state, v.category
-ORDER BY sum(v.price) DESC, count(*) DESC, v.category;
-
-
--- =============================================================================
--- 8) SLICE: 1 danh mục doanh thu cao nhất toàn kho (health_beauty)
--- =============================================================================
-WITH top_category AS (
-    SELECT category
-    FROM valid_sales
-    GROUP BY category
-    ORDER BY sum(price) DESC, count(*) DESC, category
-    LIMIT 1
-)
-SELECT
-    v.category,
-    v.customer_state,
-    round(sum(v.price), 2) AS revenue,
-    count(*) AS items_sold,
-    count(DISTINCT v.order_id) AS orders
-FROM valid_sales AS v
-JOIN top_category AS c ON c.category = v.category
+JOIN olap_slice_category AS c ON c.category = v.category
 GROUP BY v.category, v.customer_state
-ORDER BY sum(v.price) DESC, count(*) DESC, v.customer_state;
+ORDER BY v.category, sum(v.price) DESC, count(*) DESC, v.customer_state;
 
 
 -- =============================================================================
--- 9) DICE: top 10 seller toàn kho ∩ SP/RJ/MG ∩ health_beauty
---     Top 10 lấy trước trên mọi delivered; không xếp hạng lại sau lọc
---     SP, RJ, MG = 3 bang doanh thu cao nhất trên valid_sales
+-- 9) DICE: giao ba tập đã chọn (seller, bang, danh mục). Không xếp hạng trong câu này.
+--     Inner join: seller không có doanh thu trong khối này không hiện (không phải ô 0).
+--     orders đúng trên từng dòng seller × bang; không cộng các dòng seller
+--     để ra tổng đơn của cả khối.
 -- =============================================================================
-WITH top_sellers AS (
-    SELECT seller_id
-    FROM valid_sales
-    GROUP BY seller_id
-    ORDER BY sum(price) DESC, count(*) DESC, seller_id
-    LIMIT 10
-)
 SELECT
     v.seller_id,
     v.customer_state,
@@ -228,15 +279,19 @@ SELECT
     count(*) AS items_sold,
     count(DISTINCT v.order_id) AS orders
 FROM valid_sales AS v
-JOIN top_sellers AS t ON t.seller_id = v.seller_id
-WHERE v.customer_state IN ('SP', 'RJ', 'MG')
-  AND v.category = 'health_beauty'
+JOIN olap_dice_seller AS t ON t.seller_id = v.seller_id
+JOIN olap_dice_state AS st ON st.customer_state = v.customer_state
+JOIN olap_dice_category AS c ON c.category = v.category
 GROUP BY v.seller_id, v.customer_state, v.category
-ORDER BY sum(v.price) DESC, count(*) DESC, v.seller_id, v.customer_state;
+ORDER BY v.category, sum(v.price) DESC, count(*) DESC, v.seller_id, v.customer_state;
 
 
 -- =============================================================================
 -- 10) PIVOT: top 5 danh mục × SP, RJ, MG, RS, PR (ô trống = 0)
+--     Top 5 chọn theo doanh thu toàn kho, rồi mới xoay bang thành cột.
+--     Năm bang là bộ cố định nhiều khách (SP, RJ, MG, RS, PR), không phải
+--     top 5 doanh thu. five_states_total chỉ là tổng 5 cột đang hiện.
+--     ORDER BY five_states_total có thể khác thứ hạng toàn kho.
 -- =============================================================================
 WITH top_categories AS (
     SELECT category
@@ -265,6 +320,9 @@ ORDER BY five_states_total DESC, c.category;
 
 -- =============================================================================
 -- 11) Top 3 danh mục mỗi bang (ROW_NUMBER)
+--     rn là thứ hạng trong bang, không phải hạng toàn kho. Hòa doanh thu
+--     vẫn mỗi danh mục một rn. Bang ít hơn 3 danh mục thì ít hơn 3 dòng.
+--     Không cộng orders của 3 danh mục trong cùng một bang.
 -- =============================================================================
 WITH by_state_cat AS (
     SELECT
