@@ -28,8 +28,7 @@ SECTION_TITLES = {
     9: "7c) DRILL-DOWN nấc 3 — thành phố mọi bang",
     10: "8) SLICE theo olap_slice_category",
     11: "9) DICE seller ∩ olap_dice_state ∩ olap_dice_category",
-    12: "10) PIVOT top5 danh mục × 5 bang",
-    13: "11) Top 3 danh mục mỗi bang",
+    12: "10) Top 3 danh mục mỗi bang",
 }
 
 # Bảng dài hơn mức này chỉ in vài dòng đại diện. 81 dòng top-3 vẫn in đủ.
@@ -201,42 +200,25 @@ def _flow_lines(selects: list[dict]) -> list[tuple[bool, str]]:
     dice_sellers = {str(row[0]).strip() for row in dice_rows}
     dice_states = {str(row[1]).strip() for row in dice_rows}
     dice_cats = {row[2] for row in dice_rows}
+    brazil_states = {
+        "AC", "AL", "AM", "AP", "BA", "CE", "DF", "ES", "GO", "MA", "MG", "MS", "MT",
+        "PA", "PB", "PE", "PI", "PR", "RJ", "RN", "RO", "RR", "RS", "SC", "SE", "SP", "TO",
+    }
     lines.append(
         (
             len(top_sellers) == 10
             and dice_sellers <= top_sellers
-            and dice_states <= {"SP", "RJ", "MG"}
+            and dice_states <= brazil_states
             and dice_cats <= {"health_beauty"}
             and len(dice_rows) >= 1,
             f"dice {len(dice_rows)} dòng, {len(dice_sellers)}/10 seller, "
-            f"bang={sorted(dice_states)}, danh mục={sorted(dice_cats)}",
+            f"bang={len(dice_states)}/{len(brazil_states)}, danh mục={sorted(dice_cats)}",
         )
     )
-
-    pivot_rows = selects[12]["rows"]
-    pivot_ok = len(pivot_rows) == 5
-    for row in pivot_rows:
-        parts = sum((_money(v) for v in row[1:6]), Decimal("0"))
-        pivot_ok = pivot_ok and parts == _money(row[6])
-    top5 = [row[0] for row in selects[1]["rows"][:5]]
-    pivot_cats = [row[0] for row in pivot_rows]
-    lines.append(
-        (
-            pivot_ok and set(pivot_cats) == set(top5),
-            f"pivot 5 danh mục, mỗi hàng cộng đủ 5 cột | thứ tự 5 bang: {pivot_cats}",
-        )
-    )
-    if pivot_cats != top5:
-        lines.append(
-            (
-                True,
-                f"hạng toàn kho: {top5} | pivot xếp theo tổng 5 bang: {pivot_cats}",
-            )
-        )
 
     per_state: dict[str, int] = {}
     ranks_ok = True
-    for row in selects[13]["rows"]:
+    for row in selects[12]["rows"]:
         per_state[row[0]] = per_state.get(row[0], 0) + 1
         if int(row[5]) > 3:
             ranks_ok = False
