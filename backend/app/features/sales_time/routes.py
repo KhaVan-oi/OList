@@ -1095,6 +1095,63 @@ def create_sales_time_blueprint(gateway: QueryGateway):
 
 
     # ---------------------------------------------------------------------------
+    # Endpoint 10: /api/sales-time/matrix — Ma trận Tháng (hàng) × Năm (cột)
+    # Trả dạng dài (year, month, 3 measure); frontend chọn measure đang xem.
+    # Dùng chung bộ lọc với timeanalysis / dice nên đổi chế độ bảng không mất lọc.
+    # ---------------------------------------------------------------------------
+    @bp.route('/api/sales-time/matrix', methods=['GET'])
+    def olap_matrix():
+        """
+        Params (tùy chọn): year_from, year_to (mặc định 2016-2018), quarter, month,
+        weekend (1 = cuối tuần, 0 = ngày thường).
+        Ô không có giao dịch không xuất hiện trong kết quả (frontend hiển thị trống, không gán 0).
+        """
+        year_from = request.args.get('year_from', '2016')
+        year_to   = request.args.get('year_to',   '2018')
+        quarter   = request.args.get('quarter')
+        month     = request.args.get('month')
+        weekend   = request.args.get('weekend')
+
+        if not _validate_year(year_from) or not _validate_year(year_to):
+            return jsonify({'error': 'year_from / year_to không hợp lệ (2016-2018)'}), 400
+        if int(year_from) > int(year_to):
+            return jsonify({'error': 'year_from không được lớn hơn year_to'}), 400
+        if quarter and not _validate_quarter(quarter):
+            return jsonify({'error': 'quarter không hợp lệ (1-4)'}), 400
+        if month and not _validate_month(month):
+            return jsonify({'error': 'month không hợp lệ (1-12)'}), 400
+
+        conditions = [
+            "fco.order_status = 'delivered'",
+            f"d.year BETWEEN {int(year_from)} AND {int(year_to)}",
+        ]
+        if quarter: conditions.append(f"d.quarter = {int(quarter)}")
+        if month:   conditions.append(f"d.month = {int(month)}")
+        if weekend == '1': conditions.append("d.is_weekend = TRUE")
+        if weekend == '0': conditions.append("d.is_weekend = FALSE")
+
+        sql = f"""
+        SELECT
+            d.year, d.month,
+            ROUND(SUM(fs.price),         2) AS product_sales,
+            ROUND(SUM(fs.freight_value), 2) AS freight_value,
+            COUNT(*)                        AS order_item_count
+        FROM dw.fact_sales fs
+        JOIN dw.dim_date d         ON fs.purchase_date_key = d.date_key
+        JOIN dw.fact_customer_order fco ON fs.order_id = fco.order_id
+        WHERE {" AND ".join(conditions)}
+        GROUP BY d.year, d.month
+        ORDER BY d.month, d.year
+        """
+        try:
+            data = gateway.fetch_all(sql)
+            return jsonify({'status': 'ok', 'operation': 'matrix',
+                            'year_from': int(year_from), 'year_to': int(year_to), 'data': data})
+        except Exception as e:
+            return jsonify({'error': str(e)}), 500
+
+
+    # ---------------------------------------------------------------------------
     # Endpoint tổng hợp: /api/olap — Routing theo time_level và operation
     # ---------------------------------------------------------------------------
     @bp.route('/api/olap', methods=['GET'])

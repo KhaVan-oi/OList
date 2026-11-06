@@ -1,16 +1,20 @@
 import { useQuery } from '@tanstack/react-query'
 import { Link } from 'react-router-dom'
-import { Bar, BarChart, CartesianGrid, Cell, Line, LineChart, Pie, PieChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts'
+import { Bar, BarChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts'
 import { PageHeading } from '../../../components/layouts'
 import { QueryState } from '../../../components/ui'
 import { buttonVariants } from '../../../components/ui/button.tsx'
 import { Card, CardAction, CardContent, CardHeader, CardTitle } from '../../../components/ui/card.tsx'
 import { Stat } from '../../../components/ui/stat.tsx'
-import { chartFreight, chartGrid, chartMuted, chartSales, chartSlices, chartTick } from '../../../lib/chart.ts'
+import { chartGrid, chartSales, chartTick } from '../../../lib/chart.ts'
 import { axisMoney, count, money, pct } from '../../../lib/format.ts'
 import { cn } from '../../../lib/utils.ts'
-import type { Row } from '../../../types/api.ts'
-import { getCategoryBrief, getCustomerBrief, getMonthBrief, getOverview, getParetoBrief } from '../services/overviewApi.ts'
+import { CustomerChart } from '../../customer-payment/components/customer-chart.tsx'
+import { getCustomerDrilldown } from '../../customer-payment/services/customerPaymentApi.ts'
+import { getTopSellers } from '../../seller/services/sellerApi.ts'
+import { rowLabel } from '../../sales-time/depth.ts'
+import { TimeChart } from '../../sales-time/components/time-chart.tsx'
+import { getCategoryBrief, getMonthBrief, getOverview } from '../services/overviewApi.ts'
 import type { OverviewResponse } from '../types/overview.ts'
 
 const tick = { fill: chartTick, fontSize: 10 }
@@ -19,12 +23,20 @@ export function OverviewPage() {
   const overview = useQuery({ queryKey: ['overview'], queryFn: getOverview })
   const months = useQuery({ queryKey: ['overview', 'months'], queryFn: getMonthBrief })
   const categories = useQuery({ queryKey: ['overview', 'categories'], queryFn: getCategoryBrief })
-  const frequency = useQuery({ queryKey: ['overview', 'frequency'], queryFn: getCustomerBrief })
-  const pareto = useQuery({ queryKey: ['overview', 'pareto'], queryFn: getParetoBrief })
+  // Ô Khách hàng dùng đúng truy vấn mặc định của tab Khách hàng (chiều khách, measure Số khách)
+  const customerChart = useQuery({
+    queryKey: ['customer-payment', 'drilldown', 'dim=customer'],
+    queryFn: () => getCustomerDrilldown('dim=customer'),
+  })
+  // Ô Người bán dùng đúng truy vấn xếp hạng mặc định của tab Người bán (top 10, toàn kỳ)
+  const sellers = useQuery({
+    queryKey: ['seller', 'top', '10', '', '', '', ''],
+    queryFn: () => getTopSellers('10', '', '', '', []),
+  })
   const data = overview.data
-  const monthRows = (months.data?.data ?? []).map((row) => ({ ...row, label: `${row.month}/${row.year}` }))
-  const paretoRow = pareto.data?.data?.[0]
-  const paretoCategories = pareto.data?.categories ?? []
+  // Cùng nhãn và cột + đường MoM với biểu đồ Doanh thu ở tab Thời gian
+  const monthRows = (months.data?.data ?? []).map((row) => ({ ...row, label: rowLabel(row, 'timeanalysis') }))
+  const sellerRows = (sellers.data?.data ?? []).map((row, index) => ({ ...row, label: `#${index + 1}` }))
 
   return (
     <section className="space-y-3">
@@ -45,18 +57,14 @@ export function OverviewPage() {
           </CardHeader>
           <CardContent>
             <QueryState loading={months.isLoading} error={months.error}>
-              <div className="h-44">
-                <ResponsiveContainer width="100%" height="100%">
-                  <LineChart data={monthRows} margin={{ left: 0, right: 8, top: 4, bottom: 0 }}>
-                    <CartesianGrid vertical={false} stroke={chartGrid} />
-                    <XAxis dataKey="label" tick={tick} interval="preserveStartEnd" />
-                    <YAxis tickFormatter={axisMoney} width={40} tick={tick} />
-                    <Tooltip formatter={(value) => money(typeof value === 'number' ? value : Number(value))} />
-                    <Line dataKey="product_sales" name="Doanh thu hàng" stroke={chartSales} dot={false} strokeWidth={2} />
-                    <Line dataKey="freight_value" name="Cước" stroke={chartFreight} dot={false} strokeWidth={2} />
-                  </LineChart>
-                </ResponsiveContainer>
-              </div>
+              <TimeChart
+                rows={monthRows}
+                operation="timeanalysis"
+                activeKpi="sales"
+                canDrill={false}
+                onDrill={() => {}}
+                heightClass="h-44"
+              />
             </QueryState>
           </CardContent>
         </Card>
@@ -91,50 +99,29 @@ export function OverviewPage() {
       <div className="grid items-start gap-3 xl:grid-cols-5">
         <Card className="xl:col-span-3">
           <CardHeader>
-            <CardTitle>Pareto mã sản phẩm</CardTitle>
+            <CardTitle>Người bán</CardTitle>
             <CardAction>
-              <Link to="/hang-hoa" className={cn(buttonVariants({ variant: 'outline', size: 'sm' }))}>
+              <Link to="/seller" className={cn(buttonVariants({ variant: 'outline', size: 'sm' }))}>
                 Mở
               </Link>
             </CardAction>
           </CardHeader>
           <CardContent>
-            <QueryState loading={pareto.isLoading} error={pareto.error}>
-              {paretoRow && (
-                <div className="grid items-center gap-3 sm:grid-cols-5">
-                  <div className="sm:col-span-2">
-                    <ParetoDonut row={paretoRow} />
-                  </div>
-                  <div className="sm:col-span-3">
-                    <div className="h-40">
-                      <ResponsiveContainer width="100%" height="100%">
-                        <BarChart
-                          data={paretoCategories.slice(0, 6).map(prettyCategory)}
-                          layout="vertical"
-                          margin={{ left: 4, right: 8, top: 0, bottom: 0 }}
-                        >
-                          <CartesianGrid horizontal={false} stroke={chartGrid} />
-                          <XAxis type="number" tickFormatter={axisMoney} tick={tick} />
-                          <YAxis type="category" dataKey="label" width={96} tick={tick} />
-                          <Tooltip
-                            formatter={(value, _name, item) => {
-                              const row = item?.payload as Row | undefined
-                              const codes = row?.n_products != null ? count(Number(row.n_products)) : null
-                              const amount = money(typeof value === 'number' ? value : Number(value))
-                              return [codes ? `${amount} · ${codes} mã` : amount, 'Doanh thu hàng']
-                            }}
-                          />
-                          <Bar dataKey="revenue" name="Doanh thu hàng" radius={[0, 6, 6, 0]} barSize={10}>
-                            {paretoCategories.slice(0, 6).map((_, index) => (
-                              <Cell key={index} fill={chartSlices[index % chartSlices.length]} />
-                            ))}
-                          </Bar>
-                        </BarChart>
-                      </ResponsiveContainer>
-                    </div>
-                  </div>
-                </div>
-              )}
+            <QueryState loading={sellers.isLoading} error={sellers.error}>
+              <div className="h-40">
+                <ResponsiveContainer width="100%" height="100%">
+                  <BarChart data={sellerRows} layout="vertical" margin={{ left: 8, right: 12, top: 0, bottom: 0 }}>
+                    <CartesianGrid horizontal={false} stroke={chartGrid} />
+                    <XAxis type="number" tickFormatter={axisMoney} tick={tick} />
+                    <YAxis type="category" dataKey="label" width={36} tick={tick} interval={0} />
+                    <Tooltip
+                      formatter={(value) => money(typeof value === 'number' ? value : Number(value))}
+                      labelFormatter={(_label, payload) => String(payload?.[0]?.payload?.seller_id ?? '')}
+                    />
+                    <Bar dataKey="revenue" name="Doanh thu hàng" fill={chartSales} radius={[0, 6, 6, 0]} barSize={8} />
+                  </BarChart>
+                </ResponsiveContainer>
+              </div>
             </QueryState>
           </CardContent>
         </Card>
@@ -149,84 +136,14 @@ export function OverviewPage() {
             </CardAction>
           </CardHeader>
           <CardContent>
-            <QueryState loading={frequency.isLoading} error={frequency.error}>
-              <div className="h-40">
-                <ResponsiveContainer width="100%" height="100%">
-                  <BarChart data={(frequency.data?.data ?? []).map(shortTier)} margin={{ left: 0, right: 8, top: 4, bottom: 0 }}>
-                    <CartesianGrid vertical={false} stroke={chartGrid} />
-                    <XAxis dataKey="label" tick={tick} />
-                    <YAxis tickFormatter={(value) => count(Number(value))} width={40} tick={tick} />
-                    <Tooltip formatter={(value) => count(typeof value === 'number' ? value : Number(value))} />
-                    <Bar dataKey="customers" name="Khách" fill={chartSales} radius={[6, 6, 0, 0]} barSize={28} />
-                  </BarChart>
-                </ResponsiveContainer>
-              </div>
+            <QueryState loading={customerChart.isLoading} error={customerChart.error}>
+              <CustomerChart rows={customerChart.data?.data ?? []} kpi="customers" heightClass="h-40" />
             </QueryState>
           </CardContent>
         </Card>
       </div>
     </section>
   )
-}
-
-function ParetoDonut({ row }: { row: Row }) {
-  const topShare = typeof row.pct_of_total_revenue === 'number' ? row.pct_of_total_revenue : 0
-  const topProducts = Number(row.n_top_20pct_products)
-  const allProducts = Number(row.n_products)
-  const topRevenue = typeof row.top_20pct_revenue === 'number' ? row.top_20pct_revenue : 0
-  const totalRevenue = typeof row.total_revenue === 'number' ? row.total_revenue : 0
-  const restRevenue = Math.max(0, totalRevenue - topRevenue)
-  const slices = [
-    { key: 'top', label: 'Top 20% mã', value: topRevenue, fill: chartSales },
-    { key: 'rest', label: 'Còn lại', value: restRevenue, fill: chartMuted },
-  ]
-
-  return (
-    <div className="mx-auto w-full max-w-[11rem] space-y-1">
-      <div className="relative h-36 w-full">
-        <ResponsiveContainer width="100%" height="100%">
-          <PieChart>
-            <Pie
-              data={slices}
-              dataKey="value"
-              nameKey="label"
-              innerRadius={36}
-              outerRadius={52}
-              paddingAngle={2}
-              stroke="none"
-            >
-              {slices.map((slice) => (
-                <Cell key={slice.key} fill={slice.fill} />
-              ))}
-            </Pie>
-            <Tooltip
-              formatter={(value) => [
-                money(typeof value === 'number' ? value : Number(value)),
-                'Doanh thu hàng',
-              ]}
-            />
-          </PieChart>
-        </ResponsiveContainer>
-        <div className="pointer-events-none absolute inset-0 flex flex-col items-center justify-center">
-          <p className="text-lg font-semibold tabular-nums tracking-tight">{pct(topShare)}</p>
-          <p className="text-[10px] text-muted-foreground">doanh thu hàng</p>
-        </div>
-      </div>
-      <p className="text-center text-xs tabular-nums text-muted-foreground">
-        <span className="font-medium text-foreground">
-          {count(topProducts)}/{count(allProducts)}
-        </span>{' '}
-        mã
-      </p>
-    </div>
-  )
-}
-
-function prettyCategory(row: Row) {
-  return {
-    ...row,
-    label: String(row.category ?? '').replaceAll('_', ' '),
-  }
 }
 
 function Kpi({ data }: { data: OverviewResponse }) {
@@ -242,13 +159,4 @@ function Kpi({ data }: { data: OverviewResponse }) {
       <Stat label="Lệch TT − (giá+cước)" value={money(gap)} detail={`${count(payment.customers)} khách`} />
     </div>
   )
-}
-
-function shortTier(row: Row) {
-  const tier = String(row.frequency_tier)
-  let label = 'Từ 4 đơn'
-  if (tier.includes('1 don')) label = '1 đơn'
-  else if (tier.includes('2 don')) label = '2 đơn'
-  else if (tier.includes('3 don')) label = '3 đơn'
-  return { ...row, label }
 }

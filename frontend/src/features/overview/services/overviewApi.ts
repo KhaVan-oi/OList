@@ -13,11 +13,3 @@ export function getMonthBrief() {
 export function getCategoryBrief() {
   return getJson<ListResponse>('/api/product-geo/categories?limit=5')
 }
-
-export function getCustomerBrief() {
-  return getJson<ListResponse>('/api/customer-payment/frequency')
-}
-
-export function getParetoBrief() {
-  return getJson<ListResponse>('/api/product-geo/pareto')
-}
