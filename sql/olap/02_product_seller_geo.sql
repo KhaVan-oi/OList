@@ -1,5 +1,5 @@
 -- Chỉ đọc dw. Tập đơn: delivered. Doanh thu: sum(price).
--- N: toàn kho 10 | pivot 5 | mỗi bang 3 | drill-down & slice 1
+-- N: toàn kho 10 | mỗi bang 3 | drill-down & slice 1
 --
 -- CTE không giữ qua nhiều câu trong PostgreSQL, nên dùng TEMP VIEW
 -- làm nền chung (cùng nghĩa với CTE valid_sales trong bản mô tả).
@@ -221,10 +221,12 @@ ORDER BY
 -- Tham số slice / dice. Sửa INSERT rồi chạy lại file để cắt lát khác.
 -- Mặc định là lát đã chốt cho slide:
 --   slice: 1 danh mục (health_beauty = danh mục doanh thu cao nhất)
---   dice:  top 10 seller toàn kho ∩ SP/RJ/MG ∩ health_beauty
+--   dice:  top 10 seller toàn kho ∩ bang khách (đủ bang delivered) ∩ health_beauty
 -- olap_dice_seller đổ trước, cùng thứ tự với câu 2.
 -- Câu 8 và 9 chỉ giao các tập này, không xếp hạng lại.
 -- Một dòng olap_slice_category = một slice. Nhiều dòng = nhiều danh mục.
+-- olap_dice_state mặc định = mọi bang có đơn delivered; thu hẹp INSERT nếu chỉ
+-- muốn khối nhỏ (vd. SP, RJ, MG).
 -- =============================================================================
 DROP TABLE IF EXISTS olap_slice_category;
 CREATE TEMP TABLE olap_slice_category (category text PRIMARY KEY);
@@ -236,7 +238,12 @@ INSERT INTO olap_dice_category (category) VALUES ('health_beauty');
 
 DROP TABLE IF EXISTS olap_dice_state;
 CREATE TEMP TABLE olap_dice_state (customer_state char(2) PRIMARY KEY);
-INSERT INTO olap_dice_state (customer_state) VALUES ('SP'), ('RJ'), ('MG');
+INSERT INTO olap_dice_state (customer_state)
+SELECT DISTINCT customer_state
+FROM valid_sales
+WHERE customer_state IS NOT NULL
+  AND trim(customer_state) <> ''
+ORDER BY customer_state;
 
 DROP TABLE IF EXISTS olap_dice_seller;
 CREATE TEMP TABLE olap_dice_seller (seller_id text PRIMARY KEY);
@@ -287,39 +294,7 @@ ORDER BY v.category, sum(v.price) DESC, count(*) DESC, v.seller_id, v.customer_s
 
 
 -- =============================================================================
--- 10) PIVOT: top 5 danh mục × SP, RJ, MG, RS, PR (ô trống = 0)
---     Top 5 chọn theo doanh thu toàn kho, rồi mới xoay bang thành cột.
---     Năm bang là bộ cố định nhiều khách (SP, RJ, MG, RS, PR), không phải
---     top 5 doanh thu. five_states_total chỉ là tổng 5 cột đang hiện.
---     ORDER BY five_states_total có thể khác thứ hạng toàn kho.
--- =============================================================================
-WITH top_categories AS (
-    SELECT category
-    FROM valid_sales
-    GROUP BY category
-    ORDER BY sum(price) DESC, count(*) DESC, category
-    LIMIT 5
-)
-SELECT
-    c.category,
-    round(coalesce(sum(v.price) FILTER (WHERE v.customer_state = 'SP'), 0), 2) AS sp,
-    round(coalesce(sum(v.price) FILTER (WHERE v.customer_state = 'RJ'), 0), 2) AS rj,
-    round(coalesce(sum(v.price) FILTER (WHERE v.customer_state = 'MG'), 0), 2) AS mg,
-    round(coalesce(sum(v.price) FILTER (WHERE v.customer_state = 'RS'), 0), 2) AS rs,
-    round(coalesce(sum(v.price) FILTER (WHERE v.customer_state = 'PR'), 0), 2) AS pr,
-    round(coalesce(sum(v.price) FILTER (
-        WHERE v.customer_state IN ('SP', 'RJ', 'MG', 'RS', 'PR')
-    ), 0), 2) AS five_states_total
-FROM top_categories AS c
-LEFT JOIN valid_sales AS v
-    ON v.category = c.category
-   AND v.customer_state IN ('SP', 'RJ', 'MG', 'RS', 'PR')
-GROUP BY c.category
-ORDER BY five_states_total DESC, c.category;
-
-
--- =============================================================================
--- 11) Top 3 danh mục mỗi bang (ROW_NUMBER)
+-- 10) Top 3 danh mục mỗi bang (ROW_NUMBER)
 --     rn là thứ hạng trong bang, không phải hạng toàn kho. Hòa doanh thu
 --     vẫn mỗi danh mục một rn. Bang ít hơn 3 danh mục thì ít hơn 3 dòng.
 --     Không cộng orders của 3 danh mục trong cùng một bang.
