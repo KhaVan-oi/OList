@@ -1,5 +1,6 @@
+import { useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
-import { CalendarDaysIcon, ChevronLeftIcon, ChevronRightIcon, TagIcon } from 'lucide-react'
+import { CalendarDaysIcon, ChevronLeftIcon, ChevronRightIcon, GridIcon, TagIcon } from 'lucide-react'
 import { type ReactNode } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { PageHeading } from '../../../components/layouts'
@@ -9,7 +10,7 @@ import { Button } from '../../../components/ui/button.tsx'
 import { Card, CardAction, CardContent, CardHeader, CardTitle } from '../../../components/ui/card.tsx'
 import { NativeSelect } from '../../../components/ui/native-select.tsx'
 import { Stat } from '../../../components/ui/stat.tsx'
-import { Table, TableBody, TableCell, TableRow } from '../../../components/ui/table.tsx'
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '../../../components/ui/table.tsx'
 import { count, money, pct } from '../../../lib/format.ts'
 import type { Row } from '../../../types/api.ts'
 import {
@@ -29,17 +30,52 @@ import {
 import { getProductGeo } from '../services/productGeoApi.ts'
 import { PlaceChart } from './product-chart.tsx'
 
+const YEARS = ['2016', '2017', '2018']
+
 function joinQuery(...parts: string[]) {
   return parts.filter(Boolean).join('&')
 }
 
+function EmptyData() {
+  return (
+    <div className="flex flex-col items-center justify-center gap-2 py-12 text-sm text-muted-foreground">
+      <span className="text-2xl">📭</span>
+      <span>Không có dữ liệu cho bộ lọc đã chọn</span>
+    </div>
+  )
+}
+
+function TableModeButton({
+  active,
+  onClick,
+  children,
+}: {
+  active: boolean
+  onClick: () => void
+  children: ReactNode
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className={[
+        'inline-flex items-center gap-1 rounded-lg px-3 py-1 text-xs font-semibold transition-colors',
+        active ? 'bg-background text-foreground shadow' : 'text-muted-foreground hover:text-foreground',
+      ].join(' ')}
+    >
+      {children}
+    </button>
+  )
+}
+
 export function ProductGeoPage() {
   const [params, setParams] = useSearchParams()
+  const [tableMode, setTableMode] = useState<'default' | 'matrix'>('default')
   const state = stateOf(params)
   const category = categoryOf(params)
   const fullRanks = fullRanksOf(params)
   const year = yearOf(params)
-  const quarterRaw = quarterOf(params)
+  const quarter = year ? quarterOf(params) : ''
   const categoryQuery = category ? `category=${encodeURIComponent(category)}` : ''
   const rankLimit = category || fullRanks ? RANK_ALL : RANK_TOP
   const periods = useQuery({
@@ -47,16 +83,7 @@ export function ProductGeoPage() {
     queryFn: () => getProductGeo('/api/product-geo/periods'),
   })
   const yearOptions = [...new Set((periods.data?.data ?? []).map((row) => Number(row.year)).filter((value) => Number.isInteger(value)))].sort()
-  const quartersWithData = new Set(
-    (periods.data?.data ?? [])
-      .filter((row) => !year || Number(row.year) === Number(year))
-      .map((row) => Number(row.quarter))
-      .filter((value) => Number.isInteger(value)),
-  )
   const quarterOptions = [1, 2, 3, 4]
-  const periodsReady = Boolean(periods.data)
-  const quarter =
-    year && quarterRaw && (!periodsReady || quartersWithData.has(Number(quarterRaw))) ? quarterRaw : ''
   const periodQuery = periodQueryOf(year, quarter)
   const summary = useQuery({
     queryKey: ['product-geo', 'summary', category, year, quarter],
@@ -83,6 +110,21 @@ export function ProductGeoPage() {
     enabled: Boolean(state),
   })
 
+  const matrixBy = state ? 'city' : 'state'
+  const matrixYears = year ? [year] : YEARS
+  const matrixQuery = joinQuery(
+    `by=${matrixBy}`,
+    year ? `year_from=${year}&year_to=${year}` : 'year_from=2016&year_to=2018',
+    quarter ? `quarter=${quarter}` : '',
+    categoryQuery,
+    state ? `state=${state}` : '',
+  )
+  const matrix = useQuery({
+    queryKey: ['product-geo', 'matrix', matrixQuery],
+    queryFn: () => getProductGeo(`/api/product-geo/matrix?${matrixQuery}`),
+    enabled: tableMode === 'matrix',
+  })
+
   const placeQuery = state ? cities : states
   const placeRows = (placeQuery.data?.data ?? []).map((row) => ({
     ...row,
@@ -101,6 +143,9 @@ export function ProductGeoPage() {
   const freight = numberOf(headerRow?.total_freight ?? headerRow?.freight)
   const orders = numberOf(headerRow?.orders_with_items ?? headerRow?.orders)
   const ratio = revenue ? ((freight ?? 0) / revenue) * 100 : null
+  const matrixTitle = state
+    ? 'Ma trận Thành phố × Năm — Doanh thu'
+    : 'Ma trận Bang × Năm — Doanh thu'
 
   function edit(changes: Record<string, string>) {
     const next = new URLSearchParams(params)
@@ -155,9 +200,7 @@ export function ProductGeoPage() {
                 >
                   <option value="">Cả năm</option>
                   {quarterOptions.map((value) => (
-                    <option key={value} value={value} disabled={!quartersWithData.has(value)}>
-                      {`Q${value}`}
-                    </option>
+                    <option key={value} value={value}>{`Q${value}`}</option>
                   ))}
                 </NativeSelect>
               </>
@@ -196,17 +239,19 @@ export function ProductGeoPage() {
           <CardContent className="space-y-4">
             <QueryState loading={placeQuery.isLoading} error={placeQuery.error}>
               <PlaceChart rows={shown} onOpen={state ? undefined : (row) => edit({ state: String(row.customer_state ?? '') })} />
-              <div className="flex flex-wrap items-center gap-2">
-                <Button type="button" variant="outline" size="icon-sm" aria-label="Trang trước" disabled={page <= 1} onClick={() => move(page - 1)}>
-                  <ChevronLeftIcon />
-                </Button>
-                <span className="text-xs text-muted-foreground">
-                  {placeRows.length === 0 ? '0' : `${(page - 1) * PAGE_SIZE + 1}–${Math.min(placeRows.length, page * PAGE_SIZE)}`} / {count(placeRows.length)}
-                </span>
-                <Button type="button" variant="outline" size="icon-sm" aria-label="Trang sau" disabled={page >= pages} onClick={() => move(page + 1)}>
-                  <ChevronRightIcon />
-                </Button>
-              </div>
+              {placeRows.length > 0 ? (
+                <div className="flex flex-wrap items-center gap-2">
+                  <Button type="button" variant="outline" size="icon-sm" aria-label="Trang trước" disabled={page <= 1} onClick={() => move(page - 1)}>
+                    <ChevronLeftIcon />
+                  </Button>
+                  <span className="text-xs text-muted-foreground">
+                    {`${(page - 1) * PAGE_SIZE + 1}–${Math.min(placeRows.length, page * PAGE_SIZE)}`} / {count(placeRows.length)}
+                  </span>
+                  <Button type="button" variant="outline" size="icon-sm" aria-label="Trang sau" disabled={page >= pages} onClick={() => move(page + 1)}>
+                    <ChevronRightIcon />
+                  </Button>
+                </div>
+              ) : null}
             </QueryState>
           </CardContent>
         </Card>
@@ -242,7 +287,122 @@ export function ProductGeoPage() {
           />
         </div>
       </div>
+
+      <Card>
+        <CardHeader>
+          <CardTitle>{tableMode === 'matrix' ? matrixTitle : 'Dữ liệu chi tiết'}</CardTitle>
+          <CardAction>
+            <div className="inline-flex items-center gap-1 rounded-xl border border-border bg-muted p-1">
+              <TableModeButton active={tableMode === 'default'} onClick={() => setTableMode('default')}>
+                Mặc định
+              </TableModeButton>
+              <TableModeButton active={tableMode === 'matrix'} onClick={() => setTableMode('matrix')}>
+                <GridIcon className="size-3" />
+                Ma trận
+              </TableModeButton>
+            </div>
+          </CardAction>
+        </CardHeader>
+        <CardContent>
+          {tableMode === 'matrix' ? (
+            <QueryState loading={matrix.isLoading} error={matrix.error}>
+              <GeoMatrixTable
+                rows={matrix.data?.data ?? []}
+                by={matrixBy}
+                years={matrixYears}
+              />
+            </QueryState>
+          ) : (
+            <QueryState loading={placeQuery.isLoading} error={placeQuery.error}>
+              <GeoDataTable rows={placeRows} state={state} />
+            </QueryState>
+          )}
+        </CardContent>
+      </Card>
     </section>
+  )
+}
+
+function GeoDataTable({ rows, state }: { rows: Row[]; state: string }) {
+  if (!rows.length) return <EmptyData />
+  return (
+    <Table>
+      <TableHeader>
+        <TableRow>
+          <TableHead>{state ? 'Thành phố' : 'Bang'}</TableHead>
+          {state ? <TableHead>Bang</TableHead> : null}
+          <TableHead className="text-right">Doanh thu (R$)</TableHead>
+          <TableHead className="text-right">Cước (R$)</TableHead>
+          <TableHead className="text-right">Đơn</TableHead>
+        </TableRow>
+      </TableHeader>
+      <TableBody>
+        {rows.map((row) => {
+          const key = state
+            ? `${row.customer_state}-${row.customer_city}`
+            : String(row.customer_state)
+          return (
+            <TableRow key={key}>
+              <TableCell className="font-medium">
+                {state ? pretty(String(row.customer_city ?? '')) : String(row.customer_state ?? '')}
+              </TableCell>
+              {state ? <TableCell>{String(row.customer_state ?? '')}</TableCell> : null}
+              <TableCell className="text-right tabular-nums">{money(numberOf(row.revenue))}</TableCell>
+              <TableCell className="text-right tabular-nums">{money(numberOf(row.freight))}</TableCell>
+              <TableCell className="text-right tabular-nums">{count(numberOf(row.orders))}</TableCell>
+            </TableRow>
+          )
+        })}
+      </TableBody>
+    </Table>
+  )
+}
+
+function GeoMatrixTable({
+  rows,
+  by,
+  years,
+}: {
+  rows: Row[]
+  by: 'state' | 'city'
+  years: string[]
+}) {
+  const rowKey = by === 'city' ? 'customer_city' : 'customer_state'
+  const labels = [...new Set(rows.map((row) => String(row[rowKey] ?? '')).filter(Boolean))]
+  const cell = new Map<string, number>()
+  for (const row of rows) {
+    const label = String(row[rowKey] ?? '')
+    const year = String(row.year ?? '')
+    const value = numberOf(row.revenue)
+    if (label && year && value != null) cell.set(`${label}-${year}`, value)
+  }
+  if (!labels.length) return <EmptyData />
+  return (
+    <Table>
+      <TableHeader>
+        <TableRow>
+          <TableHead>{by === 'city' ? 'Thành phố' : 'Bang'}</TableHead>
+          {years.map((y) => (
+            <TableHead key={y} className="text-right">{y}</TableHead>
+          ))}
+        </TableRow>
+      </TableHeader>
+      <TableBody>
+        {labels.map((label) => (
+          <TableRow key={label}>
+            <TableCell className="font-medium">{by === 'city' ? pretty(label) : label}</TableCell>
+            {years.map((y) => {
+              const value = cell.get(`${label}-${y}`)
+              return (
+                <TableCell key={y} className="text-right tabular-nums">
+                  {value == null ? <span className="text-muted-foreground">—</span> : money(value)}
+                </TableCell>
+              )
+            })}
+          </TableRow>
+        ))}
+      </TableBody>
+    </Table>
   )
 }
 
@@ -287,40 +447,46 @@ function SideList({
       </CardHeader>
       <CardContent className="space-y-3">
         <QueryState loading={loading} error={error}>
-          <Table className="table-fixed">
-            <TableBody>
-              {rows.map((row) => (
-                <TableRow key={`${labelOf(row)}-${extra?.(row) ?? ''}`}>
-                  {extra && <TableCell className="w-8 text-muted-foreground">{extra(row)}</TableCell>}
-                  <TableCell className="w-full max-w-0" title={titleOf?.(row) ?? labelOf(row)}>
-                    {onPick ? (
-                      <Button
-                        variant="link"
-                        size="sm"
-                        className={`inline-block h-auto max-w-full truncate px-0 text-left ${active?.(row) ? 'font-semibold' : ''}`}
-                        onClick={() => onPick(row)}
-                      >
-                        {labelOf(row)}
-                      </Button>
-                    ) : (
-                      <span className="block truncate">{labelOf(row)}</span>
-                    )}
-                  </TableCell>
-                  <TableCell className="w-28 text-right tabular-nums">{money(numberOf(row.revenue))}</TableCell>
-                </TableRow>
-              ))}
-            </TableBody>
-          </Table>
-          {onPage && page != null && pages != null && total != null && (
-            <div className="flex flex-wrap items-center gap-2">
-              <Button type="button" variant="outline" size="icon-sm" aria-label="Trang trước" disabled={page <= 1} onClick={() => onPage(page - 1)}>
-                <ChevronLeftIcon />
-              </Button>
-              <span className="text-xs text-muted-foreground">{start}–{end} / {count(total)}</span>
-              <Button type="button" variant="outline" size="icon-sm" aria-label="Trang sau" disabled={page >= pages} onClick={() => onPage(page + 1)}>
-                <ChevronRightIcon />
-              </Button>
-            </div>
+          {!rows.length ? (
+            <EmptyData />
+          ) : (
+            <>
+              <Table className="table-fixed">
+                <TableBody>
+                  {rows.map((row) => (
+                    <TableRow key={`${labelOf(row)}-${extra?.(row) ?? ''}`}>
+                      {extra && <TableCell className="w-8 text-muted-foreground">{extra(row)}</TableCell>}
+                      <TableCell className="w-full max-w-0" title={titleOf?.(row) ?? labelOf(row)}>
+                        {onPick ? (
+                          <Button
+                            variant="link"
+                            size="sm"
+                            className={`inline-block h-auto max-w-full truncate px-0 text-left ${active?.(row) ? 'font-semibold' : ''}`}
+                            onClick={() => onPick(row)}
+                          >
+                            {labelOf(row)}
+                          </Button>
+                        ) : (
+                          <span className="block truncate">{labelOf(row)}</span>
+                        )}
+                      </TableCell>
+                      <TableCell className="w-28 text-right tabular-nums">{money(numberOf(row.revenue))}</TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+              {onPage && page != null && pages != null && total != null && (
+                <div className="flex flex-wrap items-center gap-2">
+                  <Button type="button" variant="outline" size="icon-sm" aria-label="Trang trước" disabled={page <= 1} onClick={() => onPage(page - 1)}>
+                    <ChevronLeftIcon />
+                  </Button>
+                  <span className="text-xs text-muted-foreground">{start}–{end} / {count(total)}</span>
+                  <Button type="button" variant="outline" size="icon-sm" aria-label="Trang sau" disabled={page >= pages} onClick={() => onPage(page + 1)}>
+                    <ChevronRightIcon />
+                  </Button>
+                </div>
+              )}
+            </>
           )}
         </QueryState>
       </CardContent>

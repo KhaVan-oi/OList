@@ -1,5 +1,5 @@
 import { useQuery } from '@tanstack/react-query'
-import { BoxesIcon, CalendarDaysIcon, ChevronDownIcon, FunnelIcon, TagIcon, XIcon } from 'lucide-react'
+import { BoxesIcon, CalendarDaysIcon, ChevronDownIcon, FunnelIcon, GridIcon, TagIcon, XIcon } from 'lucide-react'
 import { useEffect, useRef, useState, type ReactNode } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { Bar, BarChart, CartesianGrid, Cell, Pie, PieChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts'
@@ -9,9 +9,11 @@ import { Badge } from '../../../components/ui/badge.tsx'
 import { Button } from '../../../components/ui/button.tsx'
 import { Card, CardAction, CardContent, CardHeader, CardTitle } from '../../../components/ui/card.tsx'
 import { NativeSelect } from '../../../components/ui/native-select.tsx'
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '../../../components/ui/table.tsx'
 import { chartGrid, chartMuted, chartSales, chartSlices, chartTick } from '../../../lib/chart.ts'
-import { axisMoney, money } from '../../../lib/format.ts'
+import { axisMoney, count, money } from '../../../lib/format.ts'
 import type { Row } from '../../../types/api.ts'
+import { getProductGeo } from '../../product-geo/services/productGeoApi.ts'
 import {
   categoryOf,
   defaultDiceCategory,
@@ -33,17 +35,50 @@ import {
 } from '../depth.ts'
 import { getSellerCategories, getSellerDice, getSellerPeriods, getTopSellers } from '../services/sellerApi.ts'
 
+const YEARS = ['2016', '2017', '2018']
 const tick = { fill: chartTick, fontSize: 11 }
 const stateColor = Object.fromEntries(diceStateChoices.map((code, index) => [code, chartSlices[index % chartSlices.length]]))
 type Panel = 'filter' | 'dice' | null
 type FilterDropdown = 'category' | 'top' | 'states' | null
+
+function EmptyData() {
+  return (
+    <div className="flex flex-col items-center justify-center gap-2 py-12 text-sm text-muted-foreground">
+      <span className="text-2xl">📭</span>
+      <span>Không có dữ liệu cho bộ lọc đã chọn</span>
+    </div>
+  )
+}
+
+function TableModeButton({
+  active,
+  onClick,
+  children,
+}: {
+  active: boolean
+  onClick: () => void
+  children: ReactNode
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className={[
+        'inline-flex items-center gap-1 rounded-lg px-3 py-1 text-xs font-semibold transition-colors',
+        active ? 'bg-background text-foreground shadow' : 'text-muted-foreground hover:text-foreground',
+      ].join(' ')}
+    >
+      {children}
+    </button>
+  )
+}
 
 export function SellerPage() {
   const [params, setParams] = useSearchParams()
   const category = categoryOf(params)
   const top = topOf(params)
   const year = yearOf(params)
-  const quarterRaw = quarterOf(params)
+  const quarter = year ? quarterOf(params) : ''
   const diceStates = diceStatesOf(params)
   const filterStates = filterStatesOf(params)
   const focus = focusOf(params)
@@ -58,6 +93,7 @@ export function SellerPage() {
     : []
   const [panel, setPanel] = useState<Panel>(null)
   const [filterDropdown, setFilterDropdown] = useState<FilterDropdown>(null)
+  const [tableMode, setTableMode] = useState<'default' | 'matrix'>('default')
   const [draftFilterCategory, setDraftFilterCategory] = useState('')
   const [draftFilterStates, setDraftFilterStates] = useState<string[]>([])
   const [draftTop, setDraftTop] = useState('10')
@@ -72,16 +108,7 @@ export function SellerPage() {
   })
   const periodOptions = periods.data?.data ?? []
   const yearOptions = [...new Set(periodOptions.map((row) => Number(row.year)).filter((value) => Number.isInteger(value)))].sort()
-  const quartersWithData = new Set(
-    periodOptions
-      .filter((row) => !year || Number(row.year) === Number(year))
-      .map((row) => Number(row.quarter))
-      .filter((value) => Number.isInteger(value)),
-  )
   const quarterOptions = [1, 2, 3, 4]
-  const periodsReady = Boolean(periods.data)
-  const quarter =
-    year && quarterRaw && (!periodsReady || quartersWithData.has(Number(quarterRaw))) ? quarterRaw : ''
   const categories = useQuery({
     queryKey: ['seller', 'categories', year, quarter],
     queryFn: () => getSellerCategories(year, quarter),
@@ -94,6 +121,28 @@ export function SellerPage() {
     queryKey: ['seller', 'dice', top, diceCategories.join(','), diceStates.join(','), year, quarter],
     queryFn: () => getSellerDice(top, diceCategories, diceStates, year, quarter),
     enabled: useDice,
+  })
+
+  const matrixYears = year ? [year] : YEARS
+  const matrixStates = useDice ? diceStates : filterStates
+  const matrixCategory = useDice
+    ? diceCategories.length === 1
+      ? diceCategories[0]
+      : ''
+    : category
+  const matrixParts = [
+    'by=seller',
+    `limit=${top}`,
+    year ? `year_from=${year}&year_to=${year}` : 'year_from=2016&year_to=2018',
+    quarter ? `quarter=${quarter}` : '',
+    matrixCategory ? `category=${encodeURIComponent(matrixCategory)}` : '',
+    matrixStates.length ? `states=${matrixStates.join(',')}` : '',
+  ].filter(Boolean)
+  const matrixQuery = matrixParts.join('&')
+  const matrix = useQuery({
+    queryKey: ['seller', 'matrix', matrixQuery],
+    queryFn: () => getProductGeo(`/api/product-geo/matrix?${matrixQuery}`),
+    enabled: tableMode === 'matrix',
   })
 
   const rankRows = rankSellers(sellers.data?.data ?? [])
@@ -293,9 +342,7 @@ export function SellerPage() {
                   >
                     <option value="">Cả năm</option>
                     {quarterOptions.map((value) => (
-                      <option key={value} value={value} disabled={!quartersWithData.has(value)}>
-                        {`Q${value}`}
-                      </option>
+                      <option key={value} value={value}>{`Q${value}`}</option>
                     ))}
                   </NativeSelect>
                 </>
@@ -349,41 +396,45 @@ export function SellerPage() {
               </CardHeader>
               <CardContent>
                 <QueryState loading={loading} error={error}>
-                  <div className="h-96">
-                    <ResponsiveContainer width="100%" height="100%">
-                      <BarChart
-                        data={useDice ? cubeSellerRows : rankRows}
-                        layout="vertical"
-                        margin={{ left: 8, right: 12 }}
-                      >
-                        <CartesianGrid horizontal={false} stroke={chartGrid} />
-                        <XAxis type="number" tickFormatter={axisMoney} tick={tick} />
-                        <YAxis type="category" dataKey="label" width={56} tick={tick} />
-                        <Tooltip
-                          formatter={(value) => money(typeof value === 'number' ? value : Number(value))}
-                          labelFormatter={(_label, payload) => String(payload?.[0]?.payload?.seller_id ?? '')}
-                        />
-                        <Bar
-                          dataKey="revenue"
-                          name="Doanh thu hàng"
-                          radius={[0, 6, 6, 0]}
-                          barSize={14}
-                          cursor="pointer"
-                          onClick={(item) => {
-                            const id = String((item as { seller_id?: string })?.seller_id ?? (item as { payload?: Row })?.payload?.seller_id ?? '')
-                            if (id) pickSeller(id)
-                          }}
+                  {(useDice ? cubeSellerRows : rankRows).length === 0 ? (
+                    <EmptyData />
+                  ) : (
+                    <div className="h-96">
+                      <ResponsiveContainer width="100%" height="100%">
+                        <BarChart
+                          data={useDice ? cubeSellerRows : rankRows}
+                          layout="vertical"
+                          margin={{ left: 8, right: 12 }}
                         >
-                          {(useDice ? cubeSellerRows : rankRows).map((row) => (
-                            <Cell
-                              key={String(row.seller_id)}
-                              fill={focus && String(row.seller_id) === focus ? chartSales : focus ? chartMuted : chartSales}
-                            />
-                          ))}
-                        </Bar>
-                      </BarChart>
-                    </ResponsiveContainer>
-                  </div>
+                          <CartesianGrid horizontal={false} stroke={chartGrid} />
+                          <XAxis type="number" tickFormatter={axisMoney} tick={tick} />
+                          <YAxis type="category" dataKey="label" width={56} tick={tick} />
+                          <Tooltip
+                            formatter={(value) => money(typeof value === 'number' ? value : Number(value))}
+                            labelFormatter={(_label, payload) => String(payload?.[0]?.payload?.seller_id ?? '')}
+                          />
+                          <Bar
+                            dataKey="revenue"
+                            name="Doanh thu hàng"
+                            radius={[0, 6, 6, 0]}
+                            barSize={14}
+                            cursor="pointer"
+                            onClick={(item) => {
+                              const id = String((item as { seller_id?: string })?.seller_id ?? (item as { payload?: Row })?.payload?.seller_id ?? '')
+                              if (id) pickSeller(id)
+                            }}
+                          >
+                            {(useDice ? cubeSellerRows : rankRows).map((row) => (
+                              <Cell
+                                key={String(row.seller_id)}
+                                fill={focus && String(row.seller_id) === focus ? chartSales : focus ? chartMuted : chartSales}
+                              />
+                            ))}
+                          </Bar>
+                        </BarChart>
+                      </ResponsiveContainer>
+                    </div>
+                  )}
                 </QueryState>
               </CardContent>
             </Card>
@@ -557,7 +608,7 @@ export function SellerPage() {
           </aside>
         )}
 
-        {panel === 'dice' && (
+        {panel === 'dice' ? (
           <aside
             ref={sideRef}
             className="flex w-72 shrink-0 flex-col overflow-hidden rounded-2xl border border-border bg-card text-card-foreground shadow-[0_8px_24px_rgba(28,29,33,0.04)]"
@@ -655,9 +706,136 @@ export function SellerPage() {
               </Button>
             </div>
           </aside>
-        )}
+        ) : null}
       </div>
+
+      <Card>
+        <CardHeader>
+          <CardTitle>
+            {tableMode === 'matrix' ? 'Ma trận Người bán × Năm — Doanh thu' : 'Dữ liệu chi tiết'}
+          </CardTitle>
+          <CardAction>
+            <div className="inline-flex items-center gap-1 rounded-xl border border-border bg-muted p-1">
+              <TableModeButton active={tableMode === 'default'} onClick={() => setTableMode('default')}>
+                Mặc định
+              </TableModeButton>
+              <TableModeButton active={tableMode === 'matrix'} onClick={() => setTableMode('matrix')}>
+                <GridIcon className="size-3" />
+                Ma trận
+              </TableModeButton>
+            </div>
+          </CardAction>
+        </CardHeader>
+        <CardContent>
+          {tableMode === 'matrix' ? (
+            <QueryState loading={matrix.isLoading} error={matrix.error}>
+              <SellerMatrixTable rows={matrix.data?.data ?? []} years={matrixYears} />
+            </QueryState>
+          ) : (
+            <QueryState loading={loading} error={error}>
+              {useDice ? (
+                <SellerDiceTable rows={viewDiceRows} />
+              ) : (
+                <SellerRankTable rows={rankRows} />
+              )}
+            </QueryState>
+          )}
+        </CardContent>
+      </Card>
     </section>
+  )
+}
+
+function SellerRankTable({ rows }: { rows: SellerRow[] }) {
+  if (!rows.length) return <EmptyData />
+  return (
+    <Table>
+      <TableHeader>
+        <TableRow>
+          <TableHead>Hạng</TableHead>
+          <TableHead>Người bán</TableHead>
+          <TableHead className="text-right">Doanh thu (R$)</TableHead>
+          <TableHead className="text-right">Đơn</TableHead>
+        </TableRow>
+      </TableHeader>
+      <TableBody>
+        {rows.map((row) => (
+          <TableRow key={String(row.seller_id)}>
+            <TableCell>#{row.rank}</TableCell>
+            <TableCell title={String(row.seller_id)}>{sellerLabel(row.seller_id)}</TableCell>
+            <TableCell className="text-right tabular-nums">{money(numberOf(row.revenue))}</TableCell>
+            <TableCell className="text-right tabular-nums">{count(numberOf(row.orders))}</TableCell>
+          </TableRow>
+        ))}
+      </TableBody>
+    </Table>
+  )
+}
+
+function SellerDiceTable({ rows }: { rows: Row[] }) {
+  if (!rows.length) return <EmptyData />
+  return (
+    <Table>
+      <TableHeader>
+        <TableRow>
+          <TableHead>Người bán</TableHead>
+          <TableHead>Bang</TableHead>
+          <TableHead>Danh mục</TableHead>
+          <TableHead className="text-right">Doanh thu (R$)</TableHead>
+          <TableHead className="text-right">Đơn</TableHead>
+        </TableRow>
+      </TableHeader>
+      <TableBody>
+        {rows.map((row) => (
+          <TableRow key={`${row.seller_id}-${row.customer_state}-${row.category}`}>
+            <TableCell title={String(row.seller_id)}>{sellerLabel(row.seller_id)}</TableCell>
+            <TableCell>{String(row.customer_state ?? '')}</TableCell>
+            <TableCell>{pretty(String(row.category ?? ''))}</TableCell>
+            <TableCell className="text-right tabular-nums">{money(numberOf(row.revenue))}</TableCell>
+            <TableCell className="text-right tabular-nums">{count(numberOf(row.orders))}</TableCell>
+          </TableRow>
+        ))}
+      </TableBody>
+    </Table>
+  )
+}
+
+function SellerMatrixTable({ rows, years }: { rows: Row[]; years: string[] }) {
+  const sellers = [...new Set(rows.map((row) => String(row.seller_id ?? '')).filter(Boolean))]
+  const cell = new Map<string, number>()
+  for (const row of rows) {
+    const id = String(row.seller_id ?? '')
+    const y = String(row.year ?? '')
+    const value = numberOf(row.revenue)
+    if (id && y && value != null) cell.set(`${id}-${y}`, value)
+  }
+  if (!sellers.length) return <EmptyData />
+  return (
+    <Table>
+      <TableHeader>
+        <TableRow>
+          <TableHead>Người bán</TableHead>
+          {years.map((y) => (
+            <TableHead key={y} className="text-right">{y}</TableHead>
+          ))}
+        </TableRow>
+      </TableHeader>
+      <TableBody>
+        {sellers.map((id) => (
+          <TableRow key={id}>
+            <TableCell className="font-medium" title={id}>{sellerLabel(id)}</TableCell>
+            {years.map((y) => {
+              const value = cell.get(`${id}-${y}`)
+              return (
+                <TableCell key={y} className="text-right tabular-nums">
+                  {value == null ? <span className="text-muted-foreground">—</span> : money(value)}
+                </TableCell>
+              )
+            })}
+          </TableRow>
+        ))}
+      </TableBody>
+    </Table>
   )
 }
 
@@ -783,7 +961,7 @@ function CategoryDonut({
 }) {
   const total = rows.reduce((sum, row) => sum + row.revenue, 0)
   if (!rows.length || total <= 0) {
-    return <p className="py-10 text-center text-sm text-muted-foreground">Trống</p>
+    return <EmptyData />
   }
 
   return (

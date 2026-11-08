@@ -329,3 +329,107 @@ SELECT
 FROM ranked
 WHERE rn <= 3
 ORDER BY customer_state, rn;
+
+
+-- =============================================================================
+-- 11) MATRIX (dạng dài): hàng × năm 
+--     valid_sales lab không có year → join lại dim_date trên fact_sales.
+-- =============================================================================
+
+-- 11a) Bang × Năm (by=state)
+WITH matrix_sales AS (
+    SELECT
+        s.price,
+        s.freight_value,
+        s.order_id,
+        o.customer_state,
+        d.year
+    FROM dw.fact_sales AS s
+    JOIN dw.fact_customer_order AS o ON o.order_id = s.order_id
+    JOIN dw.dim_date AS d ON d.date_key = s.purchase_date_key
+    WHERE o.order_status = 'delivered'
+      AND d.year BETWEEN 2016 AND 2018
+),
+cells AS (
+    SELECT
+        customer_state,
+        year,
+        round(sum(price), 2) AS revenue,
+        round(sum(freight_value), 2) AS freight,
+        count(DISTINCT order_id) AS orders
+    FROM matrix_sales
+    WHERE customer_state IS NOT NULL
+    GROUP BY customer_state, year
+)
+SELECT *
+FROM cells
+ORDER BY sum(revenue) OVER (PARTITION BY customer_state) DESC, customer_state, year;
+
+-- 11b) Thành phố × Năm của một bang (by=city, vd. SP)
+WITH matrix_sales AS (
+    SELECT
+        s.price,
+        s.freight_value,
+        s.order_id,
+        o.customer_state,
+        coalesce(o.customer_city, '(NULL CITY)') AS customer_city,
+        d.year
+    FROM dw.fact_sales AS s
+    JOIN dw.fact_customer_order AS o ON o.order_id = s.order_id
+    JOIN dw.dim_date AS d ON d.date_key = s.purchase_date_key
+    WHERE o.order_status = 'delivered'
+      AND d.year BETWEEN 2016 AND 2018
+      AND o.customer_state = 'SP'
+),
+cells AS (
+    SELECT
+        customer_state,
+        customer_city,
+        year,
+        round(sum(price), 2) AS revenue,
+        round(sum(freight_value), 2) AS freight,
+        count(DISTINCT order_id) AS orders
+    FROM matrix_sales
+    GROUP BY customer_state, customer_city, year
+)
+SELECT *
+FROM cells
+ORDER BY sum(revenue) OVER (PARTITION BY customer_city) DESC, customer_city, year
+LIMIT 60;
+
+-- 11c) Top 10 seller × Năm (by=seller)
+WITH matrix_sales AS (
+    SELECT
+        s.price,
+        s.freight_value,
+        s.order_id,
+        trim(sel.seller_id) AS seller_id,
+        d.year
+    FROM dw.fact_sales AS s
+    JOIN dw.fact_customer_order AS o ON o.order_id = s.order_id
+    JOIN dw.dim_seller AS sel ON sel.seller_key = s.seller_key
+    JOIN dw.dim_date AS d ON d.date_key = s.purchase_date_key
+    WHERE o.order_status = 'delivered'
+      AND d.year BETWEEN 2016 AND 2018
+),
+top_sellers AS (
+    SELECT seller_id
+    FROM matrix_sales
+    GROUP BY seller_id
+    ORDER BY sum(price) DESC, count(*) DESC, seller_id
+    LIMIT 10
+),
+cells AS (
+    SELECT
+        m.seller_id,
+        m.year,
+        round(sum(m.price), 2) AS revenue,
+        round(sum(m.freight_value), 2) AS freight,
+        count(DISTINCT m.order_id) AS orders
+    FROM matrix_sales AS m
+    JOIN top_sellers AS t ON t.seller_id = m.seller_id
+    GROUP BY m.seller_id, m.year
+)
+SELECT *
+FROM cells
+ORDER BY sum(revenue) OVER (PARTITION BY seller_id) DESC, seller_id, year;
