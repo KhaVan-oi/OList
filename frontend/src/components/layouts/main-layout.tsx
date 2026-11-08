@@ -1,6 +1,6 @@
 import { buttonVariants } from "@/components/ui/button.tsx"
 import { cn } from "@/lib/utils.ts"
-import { CalendarDaysIcon, ChartColumnIcon, LayoutDashboardIcon, PackageIcon, StoreIcon, UsersIcon, type LucideIcon } from "lucide-react"
+import { CalendarDaysIcon, ChartColumnIcon, LayoutDashboardIcon, LightbulbIcon, PackageIcon, StoreIcon, UsersIcon, type LucideIcon } from "lucide-react"
 import { NavLink, Outlet } from "react-router-dom"
 
 const links: { to: string; label: string; end: boolean; icon: LucideIcon }[] = [
@@ -9,6 +9,7 @@ const links: { to: string; label: string; end: boolean; icon: LucideIcon }[] = [
   { to: "/hang-hoa", label: "Khu vực", end: false, icon: PackageIcon },
   { to: "/seller", label: "Người bán", end: false, icon: StoreIcon },
   { to: "/khach", label: "Khách hàng", end: false, icon: UsersIcon },
+  { to: "/quyet-dinh", label: "Quyết định", end: false, icon: LightbulbIcon },
 ]
 
 export function MainLayout() {
