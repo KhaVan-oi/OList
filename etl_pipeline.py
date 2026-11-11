@@ -331,6 +331,13 @@ def run_pipeline(rebuild_schema: bool = True):
         # Chạy kiểm tra các trường hợp F1 -> F8
         run_acceptance_tests(cur)
 
+        # Tạo lại view nguồn cho DSS (bước 5 đã DROP SCHEMA dw CASCADE nên view bị xóa theo).
+        # Đối soát view với fact_sales vẫn do run_dss_01.py làm.
+        print("\n[Hậu kỳ] Tạo view DSS dw.v_dss_monthly_demand (sql/dss/01_demand_mart.sql)...")
+        cur.execute(read_sql_file(SQL_DIR / "dss" / "01_demand_mart.sql"))
+        conn.commit()
+        print("  -> View DSS đã tạo.")
+
         total_time = time.time() - start_total
         print(f"\n🎉 HOÀN TẤT PIPELINE VÀO '{config['database']}' TRONG {total_time:.2f} GIÂY!")
 

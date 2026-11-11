@@ -1,47 +1,57 @@
 import { useQuery } from '@tanstack/react-query'
-import { LightbulbIcon } from 'lucide-react'
-import { useState } from 'react'
-import { CartesianGrid, ComposedChart, Legend, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts'
+import { useState, type ReactNode } from 'react'
+import {
+  CartesianGrid,
+  ComposedChart,
+  Legend,
+  Line,
+  LineChart,
+  ReferenceLine,
+  ResponsiveContainer,
+  Tooltip,
+  XAxis,
+  YAxis,
+} from 'recharts'
 import { PageHeading } from '../../../components/layouts'
 import { QueryState } from '../../../components/ui'
 import { Badge } from '../../../components/ui/badge.tsx'
 import { Card, CardContent, CardHeader, CardTitle } from '../../../components/ui/card.tsx'
 import { FilterChip } from '../../../components/ui/filter-chip.tsx'
 import { FilterSelect, filterBarClass } from '../../../components/ui/filter-select.tsx'
-import { Stat } from '../../../components/ui/stat.tsx'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '../../../components/ui/table.tsx'
 import { chartFreight, chartGrid, chartMuted, chartSales, chartTick } from '../../../lib/chart.ts'
 import { axisMoney } from '../../../lib/format.ts'
-import { baselineVerdict, categoryLabel, formatMetric, ratio, signedPct } from '../format.ts'
+import { categoryLabel, decimal1, formatMetric, monthLabel, ratio, signedMetric } from '../format.ts'
 import {
-  DEFAULT_WHATIF,
   getDssAccuracy,
   getDssForecast,
   getDssOptions,
-  getDssWhatIf,
   type DssForecast,
   type DssMetric,
   type DssModel,
   type DssScope,
   type DssSelection,
-  type DssWhatIf,
   type ModelName,
-  type WhatIfInputs,
 } from '../services/dssApi.ts'
-import { WhatIfPanel } from './whatif-panel.tsx'
 
 const tick = { fill: chartTick, fontSize: 11 }
 
 const MODEL_LABEL: Record<DssModel, string> = {
-  blend: 'Kết hợp (mặc định)',
-  naive: 'Tháng trước',
+  blend: 'Kết hợp (khuyên dùng)',
+  naive: 'Bằng tháng trước',
   ma3: 'Trung bình 3 tháng',
-  holt: 'Holt',
-  auto: 'Tự chọn theo WAPE',
+  holt: 'Có tính xu hướng (Holt)',
 }
 
 const MODEL_ORDER: ModelName[] = ['blend', 'naive', 'ma3', 'holt']
-const SERVICE_OPTIONS = ['0.7', '0.8', '0.9', '0.95', '0.99']
+
+/** Mức an toàn: tên dễ hiểu đi kèm phân vị thật. */
+const SERVICE_OPTIONS: { value: string; label: string }[] = [
+  { value: '0.85', label: 'Tiết kiệm · 85%' },
+  { value: '0.9', label: 'Cân bằng · 90%' },
+  { value: '0.95', label: 'An toàn · 95%' },
+  { value: '0.99', label: 'Rất an toàn · 99%' },
+]
 
 const metricUnit: Record<DssMetric, string> = { units: 'món', revenue: 'R$' }
 
@@ -54,7 +64,6 @@ export function DssPage() {
     service: '0.9',
     excludeEvent: true,
   })
-  const [whatIf, setWhatIf] = useState<WhatIfInputs>(DEFAULT_WHATIF)
 
   const options = useQuery({ queryKey: ['dss', 'options'], queryFn: getDssOptions })
   const forecast = useQuery({
@@ -65,12 +74,6 @@ export function DssPage() {
   const accuracy = useQuery({
     queryKey: ['dss', 'accuracy', selection.metric],
     queryFn: () => getDssAccuracy(selection.metric),
-  })
-  // Cùng khóa truy vấn với khối what-if bên dưới nên React Query chỉ gọi API một lần.
-  const whatIfResult = useQuery({
-    queryKey: ['dss', 'whatif', selection, whatIf],
-    queryFn: () => getDssWhatIf(selection, whatIf),
-    enabled: selection.scope === 'total' || Boolean(selection.value),
   })
 
   const states = options.data?.states ?? []
@@ -93,248 +96,264 @@ export function DssPage() {
         ? `Bang ${selection.value}`
         : categoryLabel(selection.value)
 
-  const tradeoffAtService = data?.tradeoff.find((row) => Math.abs(row.service - Number(selection.service)) < 1e-9)
-  const chosenMetric = data?.metrics.find((row) => row.model === data.chosen_model)
-  const naiveMetric = data?.metrics.find((row) => row.model === 'naive')
-
   return (
     <section className="space-y-4">
       <PageHeading
-        title="Hỗ trợ quyết định"
-        description="Dự báo nhu cầu tháng tới, đề xuất lượng nhập và thử kịch bản khuyến mãi trên đơn delivered."
+        title="Quyết định nhập hàng"
+        description="Tháng tới bán được bao nhiêu, và nên nhập bao nhiêu."
         actions={
-          <div className="flex flex-wrap items-center justify-end gap-2">
-            <div className={filterBarClass}>
-              <LightbulbIcon className="ml-1 size-4 text-muted-foreground" />
-              <FilterSelect
-                id="dss-scope"
-                label="Phạm vi"
-                minWidth="7.5rem"
-                value={selection.scope}
-                onChange={(value) => changeScope(value as DssScope)}
-              >
-                <option value="total">Toàn kho</option>
-                <option value="state">Theo bang</option>
-                <option value="category">Theo danh mục</option>
-              </FilterSelect>
-              {selection.scope === 'state' ? (
-                <FilterSelect
-                  id="dss-state"
-                  label="Bang"
-                  minWidth="6.5rem"
-                  value={selection.value}
-                  onChange={(value) => change({ value })}
-                >
-                  {states.map((row) => (
-                    <option key={row.code} value={row.code}>{`Bang ${row.code}`}</option>
-                  ))}
-                </FilterSelect>
-              ) : null}
-              {selection.scope === 'category' ? (
-                <FilterSelect
-                  id="dss-category"
-                  label="Danh mục"
-                  minWidth="10rem"
-                  value={selection.value}
-                  onChange={(value) => change({ value })}
-                >
-                  {categories.map((row) => (
-                    <option key={row.category} value={row.category}>{categoryLabel(row.category)}</option>
-                  ))}
-                </FilterSelect>
-              ) : null}
-              <FilterSelect
-                id="dss-metric"
-                label="Đo lường"
-                minWidth="7rem"
-                value={selection.metric}
-                onChange={(value) => change({ metric: value as DssMetric })}
-              >
-                <option value="units">Số món</option>
-                <option value="revenue">Doanh thu hàng</option>
-              </FilterSelect>
-              <FilterSelect
-                id="dss-model"
-                label="Mô hình dự báo"
-                minWidth="9.5rem"
-                value={selection.model}
-                onChange={(value) => change({ model: value as DssModel })}
-              >
-                {(['blend', 'naive', 'ma3', 'holt', 'auto'] as DssModel[]).map((model) => (
-                  <option key={model} value={model}>{MODEL_LABEL[model]}</option>
+          <div className={filterBarClass}>
+            <FilterSelect
+              id="dss-scope"
+              label="Xem theo"
+              minWidth="7.5rem"
+              value={selection.scope}
+              onChange={(value) => changeScope(value as DssScope)}
+            >
+              <option value="total">Toàn kho</option>
+              <option value="state">Theo bang</option>
+              <option value="category">Theo danh mục</option>
+            </FilterSelect>
+            {selection.scope === 'state' ? (
+              <FilterSelect id="dss-state" label="Bang" minWidth="6.5rem" value={selection.value} onChange={(value) => change({ value })}>
+                {states.map((row) => (
+                  <option key={row.code} value={row.code}>{`Bang ${row.code}`}</option>
                 ))}
               </FilterSelect>
+            ) : null}
+            {selection.scope === 'category' ? (
               <FilterSelect
-                id="dss-service"
-                label="Mức phục vụ"
-                minWidth="8rem"
-                value={selection.service}
-                onChange={(value) => change({ service: value })}
+                id="dss-category"
+                label="Danh mục"
+                minWidth="10rem"
+                value={selection.value}
+                onChange={(value) => change({ value })}
               >
-                {SERVICE_OPTIONS.map((value) => (
-                  <option key={value} value={value}>{`Phục vụ ${Math.round(Number(value) * 100)}%`}</option>
+                {categories.map((row) => (
+                  <option key={row.category} value={row.category}>{categoryLabel(row.category)}</option>
                 ))}
               </FilterSelect>
-            </div>
-            <FilterChip active={selection.excludeEvent} onClick={() => change({ excludeEvent: !selection.excludeEvent })}>
-              Bỏ Black Friday khỏi mẫu sai số
-            </FilterChip>
+            ) : null}
+            <FilterSelect
+              id="dss-metric"
+              label="Đo bằng"
+              minWidth="7rem"
+              value={selection.metric}
+              onChange={(value) => change({ metric: value as DssMetric })}
+            >
+              <option value="units">Số món</option>
+              <option value="revenue">Doanh thu</option>
+            </FilterSelect>
+            <FilterSelect
+              id="dss-service"
+              label="Mức an toàn"
+              minWidth="9rem"
+              value={selection.service}
+              onChange={(value) => change({ service: value })}
+            >
+              {SERVICE_OPTIONS.map((item) => (
+                <option key={item.value} value={item.value}>{item.label}</option>
+              ))}
+            </FilterSelect>
           </div>
         }
       />
 
+      <details className="group text-sm">
+        <summary className="w-fit cursor-pointer text-muted-foreground select-none hover:text-foreground">
+          Tùy chọn nâng cao
+        </summary>
+        <div className="mt-2 flex flex-wrap items-center gap-2">
+          <div className={filterBarClass}>
+            <FilterSelect
+              id="dss-model"
+              label="Cách dự báo"
+              minWidth="12rem"
+              value={selection.model}
+              onChange={(value) => change({ model: value as DssModel })}
+            >
+              {MODEL_ORDER.map((model) => (
+                <option key={model} value={model}>{MODEL_LABEL[model]}</option>
+              ))}
+            </FilterSelect>
+          </div>
+          <FilterChip active={selection.excludeEvent} onClick={() => change({ excludeEvent: !selection.excludeEvent })}>
+            Bỏ tháng Black Friday khi tính dự phòng
+          </FilterChip>
+        </div>
+      </details>
+
       <QueryState loading={forecast.isLoading} error={forecast.error}>
         {data ? (
           <>
-            <ConclusionCard data={data} scopeLabel={scopeLabel} whatIf={whatIfResult.data} />
+            <AnswerCard data={data} scopeLabel={scopeLabel} />
 
-            <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
-              <Stat
-                label={`Dự báo ${data.next.month} (${metricUnit[data.metric]})`}
-                value={formatMetric(data.metric, data.next.forecast)}
-                detail={`${scopeLabel} · ${MODEL_LABEL[data.chosen_model]}`}
-              />
-              <Stat
-                label="Lượng nhập đề xuất"
-                value={formatMetric(data.metric, data.order.quantity)}
-                detail={`Đệm ${data.order.buffer_pct >= 0 ? '+' : ''}${data.order.buffer_pct.toFixed(1)}% ở mức phục vụ ${Math.round(data.service * 100)}%`}
-              />
-              <Stat
-                label="Sai số backtest (WAPE)"
-                value={ratio(chosenMetric?.wape)}
-                detail={`Baseline "tháng trước": ${ratio(naiveMetric?.wape)} · ${chosenMetric?.n ?? 0} tháng kiểm tra`}
-              />
-              <Stat
-                label="Thiếu hàng thực nghiệm"
-                value={ratio(tradeoffAtService?.stockout_rate)}
-                detail={`Dư hàng trung bình ${tradeoffAtService?.overstock_pct != null ? `${tradeoffAtService.overstock_pct.toFixed(1)}%` : 'Trống'} (leave-one-out)`}
-              />
-            </div>
-
-            <Card>
-              <CardHeader>
-                <CardTitle>Thực tế, dự báo và lượng nhập · {scopeLabel}</CardTitle>
-                <p className="text-xs text-muted-foreground">
-                  Đường đứt là dự báo trước 1 tháng ở từng tháng backtest, chỉ dùng dữ liệu trước tháng đó.
-                  Điểm cuối là dự báo và lượng nhập cho {data.next.month}.
-                </p>
-              </CardHeader>
-              <CardContent>
-                <ForecastChart data={data} />
-              </CardContent>
-            </Card>
-
-            <div className="grid gap-4 xl:grid-cols-2">
-              <Card>
+            <div className="grid gap-4 xl:grid-cols-3">
+              <Card className="xl:col-span-2">
                 <CardHeader>
-                  <CardTitle>So sánh mô hình trên backtest</CardTitle>
-                </CardHeader>
-                <CardContent>
-                  <Table>
-                    <TableHeader>
-                      <TableRow>
-                        <TableHead>Mô hình</TableHead>
-                        <TableHead className="text-right">WAPE</TableHead>
-                        <TableHead className="text-right">WAPE bỏ Black Friday</TableHead>
-                        <TableHead className="text-right">Thiên lệch</TableHead>
-                      </TableRow>
-                    </TableHeader>
-                    <TableBody>
-                      {MODEL_ORDER.map((model) => {
-                        const row = data.metrics.find((item) => item.model === model)
-                        const used = model === data.chosen_model
-                        return (
-                          <TableRow key={model}>
-                            <TableCell className="font-medium">
-                              {MODEL_LABEL[model]}
-                              {used ? <Badge variant="secondary" className="ml-2">đang dùng</Badge> : null}
-                              {model === 'naive' ? <Badge variant="outline" className="ml-2">baseline</Badge> : null}
-                              {model === data.best_model && data.best_model !== data.chosen_model ? (
-                                <Badge variant="outline" className="ml-2">WAPE thấp nhất</Badge>
-                              ) : null}
-                            </TableCell>
-                            <TableCell className="text-right tabular-nums">{ratio(row?.wape)}</TableCell>
-                            <TableCell className="text-right tabular-nums">{ratio(row?.wape_ex_event)}</TableCell>
-                            <TableCell className="text-right tabular-nums">{ratio(row?.bias)}</TableCell>
-                          </TableRow>
-                        )
-                      })}
-                    </TableBody>
-                  </Table>
-                  <p className="mt-3 text-xs text-muted-foreground">{data.note}</p>
-                </CardContent>
-              </Card>
-
-              <Card>
-                <CardHeader>
-                  <CardTitle>Đánh đổi thiếu hàng và dư hàng</CardTitle>
+                  <CardTitle>Bán thực tế và dự báo</CardTitle>
                   <p className="text-xs text-muted-foreground">
-                    Hệ số đệm của mỗi tháng chỉ học từ các tháng khác (leave-one-out), nên đây là tỷ lệ đo được trên dữ
-                    liệu, không phải cam kết của phân vị.
+                    Chấm đậm cuối cùng là lượng nên nhập cho {monthLabel(data.next.month)}.
                   </p>
                 </CardHeader>
                 <CardContent>
-                  <TradeoffChart rows={data.tradeoff} />
+                  <ForecastChart data={data} />
+                </CardContent>
+              </Card>
+
+              <Card>
+                <CardHeader>
+                  <CardTitle>Chọn mức an toàn thế nào?</CardTitle>
+                  <p className="text-xs text-muted-foreground">
+                    Đường dọc là mức bạn đang chọn.
+                  </p>
+                </CardHeader>
+                <CardContent>
+                  <TradeoffChart rows={data.tradeoff} selected={Number(selection.service)} />
                 </CardContent>
               </Card>
             </div>
+
+            <TechnicalDetails data={data}>
+              <QueryState loading={accuracy.isLoading} error={accuracy.error}>
+                {accuracy.data ? (
+                  <div className="space-y-2">
+                    <h3 className="text-base font-semibold">Sai số theo mức chi tiết</h3>
+                    <p className="text-xs text-muted-foreground">
+                      Giá trị trong ngoặc là sai số khi bỏ Black Friday.
+                    </p>
+                    <Table>
+                      <TableHeader>
+                        <TableRow>
+                          <TableHead>Mức</TableHead>
+                          {MODEL_ORDER.map((model) => (
+                            <TableHead key={model} className="text-right">{MODEL_LABEL[model]}</TableHead>
+                          ))}
+                        </TableRow>
+                      </TableHeader>
+                      <TableBody>
+                        {accuracy.data.levels.map((level) => (
+                          <TableRow key={level.level}>
+                            <TableCell className="font-medium">{level.level}</TableCell>
+                            {MODEL_ORDER.map((model) => {
+                              const cell = level.models.find((item) => item.model === model)
+                              return (
+                                <TableCell key={model} className="text-right tabular-nums">
+                                  {ratio(cell?.wape)}
+                                  <span className="ml-1 text-xs text-muted-foreground">({ratio(cell?.wape_ex_event)})</span>
+                                </TableCell>
+                              )
+                            })}
+                          </TableRow>
+                        ))}
+                      </TableBody>
+                    </Table>
+                  </div>
+                ) : null}
+              </QueryState>
+            </TechnicalDetails>
           </>
         ) : null}
       </QueryState>
-
-      <Card>
-        <CardHeader>
-          <CardTitle>Độ chính xác theo mức tổng hợp</CardTitle>
-          <p className="text-xs text-muted-foreground">
-            Cùng một phương pháp, mức chi tiết càng cao thì sai số càng lớn. Báo cáo song song có và không có tháng
-            Black Friday.
-          </p>
-        </CardHeader>
-        <CardContent>
-          <QueryState loading={accuracy.isLoading} error={accuracy.error}>
-            {accuracy.data ? (
-              <>
-                <Table>
-                  <TableHeader>
-                    <TableRow>
-                      <TableHead>Mức tổng hợp</TableHead>
-                      {MODEL_ORDER.map((model) => (
-                        <TableHead key={model} className="text-right">
-                          {MODEL_LABEL[model]}
-                          {model === 'naive' ? ' (baseline)' : ''}
-                        </TableHead>
-                      ))}
-                    </TableRow>
-                  </TableHeader>
-                  <TableBody>
-                    {accuracy.data.levels.map((level) => (
-                      <TableRow key={level.level}>
-                        <TableCell className="font-medium">{level.level}</TableCell>
-                        {MODEL_ORDER.map((model) => {
-                          const cell = level.models.find((item) => item.model === model)
-                          return (
-                            <TableCell key={model} className="text-right tabular-nums">
-                              {ratio(cell?.wape)}
-                              <span className="ml-1 text-xs text-muted-foreground">({ratio(cell?.wape_ex_event)})</span>
-                            </TableCell>
-                          )
-                        })}
-                      </TableRow>
-                    ))}
-                  </TableBody>
-                </Table>
-                <p className="mt-3 text-xs text-muted-foreground">
-                  WAPE gộp qua {accuracy.data.test_window.n_months} tháng kiểm tra ({accuracy.data.test_window.first} →{' '}
-                  {accuracy.data.test_window.last}). Trong ngoặc là WAPE khi bỏ Black Friday 2017 và tháng sau.
-                </p>
-              </>
-            ) : null}
-          </QueryState>
-        </CardContent>
-      </Card>
-
-      <WhatIfPanel selection={selection} scopeLabel={scopeLabel} applied={whatIf} onApply={setWhatIf} />
     </section>
+  )
+}
+
+function AnswerCard({ data, scopeLabel }: { data: DssForecast; scopeLabel: string }) {
+  const unit = metricUnit[data.metric]
+  const chosen = data.metrics.find((row) => row.model === data.chosen_model)
+  const tradeoff = data.tradeoff.find((row) => Math.abs(row.service - data.service) < 1e-9)
+  const bufferPct = `${data.order.buffer_pct >= 0 ? '+' : '−'}${decimal1(Math.abs(data.order.buffer_pct))}%`
+
+  return (
+    <Card className="border-primary/30 bg-primary/5">
+      <CardHeader>
+        <p className="text-sm text-muted-foreground">
+          T{monthLabel(data.next.month).slice(1)} · {scopeLabel}
+        </p>
+        <CardTitle className="text-2xl leading-tight sm:text-3xl">
+          Nên nhập khoảng{' '}
+          <span className="text-primary tabular-nums">
+            {formatMetric(data.metric, data.order.quantity)} {unit}
+          </span>
+        </CardTitle>
+      </CardHeader>
+      <CardContent className="space-y-4">
+        <div className="grid gap-3 sm:grid-cols-3">
+          <Figure label="Dự báo bán" value={`${formatMetric(data.metric, data.next.forecast)} ${unit}`} />
+          <Figure
+            label="Dự phòng an toàn"
+            value={`${signedMetric(data.metric, data.order.buffer)} ${unit}`}
+            hint={`(${bufferPct} so với dự báo bán)`}
+          />
+          <Figure
+            label="Dự báo thường lệch"
+            value={`±${ratio(chosen?.wape)}`}
+            hint={`so với thực tế, kiểm tra trên ${chosen?.n ?? 0} tháng`}
+          />
+        </div>
+
+        {tradeoff?.stockout_rate != null && tradeoff.overstock_pct != null ? (
+          <p className="text-sm">
+            Với mức an toàn {Math.round(data.service * 100)}%, có <strong>{ratio(tradeoff.stockout_rate)}</strong> số
+            tháng thiếu hàng và dư trung bình <strong>{decimal1(tradeoff.overstock_pct)}%</strong>.
+          </p>
+        ) : null}
+      </CardContent>
+    </Card>
+  )
+}
+
+function Figure({ label, value, hint }: { label: string; value: string; hint?: string }) {
+  return (
+    <div className="rounded-lg border border-border bg-card px-4 py-3">
+      <p className="text-xs text-muted-foreground">{label}</p>
+      <p className="mt-1 text-lg font-bold tracking-tight tabular-nums">{value}</p>
+      {hint ? <p className="mt-0.5 text-xs text-muted-foreground">{hint}</p> : null}
+    </div>
+  )
+}
+
+function TechnicalDetails({ data, children }: { data: DssForecast; children: ReactNode }) {
+  return (
+    <details className="rounded-xl border border-border bg-card shadow-sm">
+      <summary className="cursor-pointer px-4 py-3 text-sm font-medium select-none">
+        Xem chi tiết kỹ thuật (so sánh cách dự báo)
+      </summary>
+      <div className="space-y-6 border-t border-border p-4">
+        <div className="space-y-2">
+          <h3 className="text-base font-semibold">So sánh các cách dự báo</h3>
+          <Table>
+            <TableHeader>
+              <TableRow>
+                <TableHead>Cách dự báo</TableHead>
+                <TableHead className="text-right">Sai số</TableHead>
+                <TableHead className="text-right">Sai số khi bỏ Black Friday</TableHead>
+                <TableHead className="text-right">Lệch trung bình</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {MODEL_ORDER.map((model) => {
+                const row = data.metrics.find((item) => item.model === model)
+                return (
+                  <TableRow key={model}>
+                    <TableCell className="font-medium">
+                      {MODEL_LABEL[model]}
+                      {model === data.chosen_model ? <Badge variant="secondary" className="ml-2">đang dùng</Badge> : null}
+                      {model === 'naive' ? <Badge variant="outline" className="ml-2">mốc so sánh</Badge> : null}
+                    </TableCell>
+                    <TableCell className="text-right tabular-nums">{ratio(row?.wape)}</TableCell>
+                    <TableCell className="text-right tabular-nums">{ratio(row?.wape_ex_event)}</TableCell>
+                    <TableCell className="text-right tabular-nums">{ratio(row?.bias)}</TableCell>
+                  </TableRow>
+                )
+              })}
+            </TableBody>
+          </Table>
+        </div>
+        {children}
+      </div>
+    </details>
   )
 }
 
@@ -374,7 +393,7 @@ function ForecastChart({ data }: { data: DssForecast }) {
           <Line
             type="monotone"
             dataKey="order"
-            name="Lượng nhập đề xuất"
+            name="Nên nhập"
             stroke={chartMuted}
             strokeWidth={0}
             dot={{ r: 6, fill: chartSales, stroke: chartSales }}
@@ -387,9 +406,16 @@ function ForecastChart({ data }: { data: DssForecast }) {
   )
 }
 
-function TradeoffChart({ rows }: { rows: { service: number; stockout_rate: number | null; overstock_pct: number | null }[] }) {
+function TradeoffChart({
+  rows,
+  selected,
+}: {
+  rows: { service: number; stockout_rate: number | null; overstock_pct: number | null }[]
+  selected: number
+}) {
+  const label = (service: number) => `${Math.round(service * 100)}%`
   const chartRows = rows.map((row) => ({
-    label: `${Math.round(row.service * 100)}%`,
+    label: label(row.service),
     stockout: row.stockout_rate == null ? null : row.stockout_rate * 100,
     overstock: row.overstock_pct,
   }))
@@ -400,62 +426,13 @@ function TradeoffChart({ rows }: { rows: { service: number; stockout_rate: numbe
           <CartesianGrid vertical={false} stroke={chartGrid} />
           <XAxis dataKey="label" tick={tick} />
           <YAxis tickFormatter={(value: number) => `${value}%`} width={48} tick={tick} />
-          <Tooltip formatter={(value: unknown) => `${Number(value).toFixed(1)}%`} />
+          <Tooltip formatter={(value: unknown) => `${decimal1(Number(value))}%`} />
           <Legend />
-          <Line type="monotone" dataKey="stockout" name="Tỷ lệ tháng thiếu hàng" stroke="#ff808b" strokeWidth={2} dot={{ r: 3 }} isAnimationActive={false} />
+          <ReferenceLine x={label(selected)} stroke={chartTick} strokeDasharray="3 3" />
+          <Line type="monotone" dataKey="stockout" name="Tháng thiếu hàng" stroke="#ff808b" strokeWidth={2} dot={{ r: 3 }} isAnimationActive={false} />
           <Line type="monotone" dataKey="overstock" name="Dư hàng trung bình" stroke={chartSales} strokeWidth={2} dot={{ r: 3 }} isAnimationActive={false} />
         </LineChart>
       </ResponsiveContainer>
     </div>
-  )
-}
-
-function ConclusionCard({ data, scopeLabel, whatIf }: { data: DssForecast; scopeLabel: string; whatIf: DssWhatIf | undefined }) {
-  const unit = metricUnit[data.metric]
-  const chosen = data.metrics.find((row) => row.model === data.chosen_model)
-  const naive = data.metrics.find((row) => row.model === 'naive')
-  const tradeoff = data.tradeoff.find((row) => Math.abs(row.service - data.service) < 1e-9)
-  const service = Math.round(data.service * 100)
-  const buffer = `${data.order.buffer_pct >= 0 ? '+' : ''}${data.order.buffer_pct.toFixed(1)}%`
-
-  const base = whatIf?.promo.scenarios.find((row) => row.realization === 1)
-  const flat = whatIf?.promo.scenarios.find((row) => row.realization === 0)
-  const percent = (value: number) => `${Math.round(value * 100)}%`
-
-  return (
-    <Card className="border-primary/30 bg-primary/5">
-      <CardHeader>
-        <CardTitle>Kết luận cho người quyết định · {scopeLabel}</CardTitle>
-      </CardHeader>
-      <CardContent>
-        <ul className="list-disc space-y-1.5 pl-5 text-sm">
-          <li>
-            <strong>Nhập hàng:</strong> tháng {data.next.month} dự báo bán khoảng {formatMetric(data.metric, data.next.forecast)}{' '}
-            {unit}. Nên nhập khoảng {formatMetric(data.metric, data.order.quantity)} {unit} (đệm {buffer}, mức phục vụ {service}%).
-            {tradeoff?.stockout_rate != null && tradeoff.overstock_pct != null
-              ? ` Mô phỏng trên quá khứ, mức này vẫn thiếu hàng ở ${ratio(tradeoff.stockout_rate)} số tháng và dư trung bình ${tradeoff.overstock_pct.toFixed(1)}%.`
-              : ''}
-          </li>
-          <li>
-            <strong>Độ tin cậy:</strong> sai số backtest {ratio(chosen?.wape)} trên {chosen?.n ?? 0} tháng (bỏ Black Friday:{' '}
-            {ratio(chosen?.wape_ex_event)}). Baseline "bằng tháng trước": {ratio(naive?.wape)} (bỏ Black Friday:{' '}
-            {ratio(naive?.wape_ex_event)}). {baselineVerdict(data.chosen_model, chosen?.wape, naive?.wape)}
-          </li>
-          {whatIf && base && flat ? (
-            <li>
-              <strong>Khuyến mãi</strong> (giả định cầu tăng {percent(whatIf.inputs.uplift)}, giảm giá {percent(whatIf.inputs.discount)}, biên{' '}
-              {percent(whatIf.inputs.margin)}):{' '}
-              {whatIf.breakeven_uplift == null
-                ? 'giảm giá không thấp hơn biên lợi nhuận nên mỗi món bán ra đều lỗ.'
-                : `hòa vốn khi cầu tăng ít nhất ${percent(whatIf.breakeven_uplift)}. Nếu đạt đúng giả định, lợi nhuận ${signedPct(base.profit_change_pct)} so với không khuyến mãi; nếu cầu không tăng, ${signedPct(flat.profit_change_pct)}.`}
-            </li>
-          ) : null}
-        </ul>
-        <p className="mt-3 text-xs text-muted-foreground">
-          Dự báo dựa trên {data.history.length} tháng lịch sử. Phần khuyến mãi là kịch bản theo giả định bạn nhập, không suy ra từ dữ liệu;
-          nó tính theo số món bất kể đo lường đang chọn.
-        </p>
-      </CardContent>
-    </Card>
   )
 }

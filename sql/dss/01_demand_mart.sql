@@ -1,5 +1,5 @@
 -- DSS: nhu cầu theo tháng × bang × danh mục (đơn delivered).
--- Một view duy nhất làm nguồn cho dự báo nhập hàng và what-if khuyến mãi.
+-- Một view duy nhất làm nguồn cho dự báo nhu cầu và đề xuất lượng nhập hàng.
 -- Không đổi schema sao. Chỉ đọc fact_sales, fact_customer_order, dim_product, dim_date.
 --
 -- Grain: tháng lịch × bang khách (đơn) × danh mục.
@@ -7,7 +7,7 @@
 --   revenue = sum(price), cùng thước đo "Doanh thu hàng" của OLAP
 --   orders  = count(DISTINCT order_id) TRONG ô này. Không cộng xuyên danh mục.
 --
--- Chạy: python run_dss_01.py
+-- Được etl_pipeline.py tạo lại sau mỗi lần nạp kho. Đối soát với fact_sales: python run_dss_01.py
 
 CREATE OR REPLACE VIEW dw.v_dss_monthly_demand AS
 SELECT
@@ -25,4 +25,4 @@ WHERE o.order_status = 'delivered'
 GROUP BY 1, 2, 3;
 
 COMMENT ON VIEW dw.v_dss_monthly_demand IS
-    'DSS nhập hàng và khuyến mãi: nhu cầu delivered theo tháng, bang, danh mục. Đối soát: sum(revenue) = sum(price) delivered.';
+    'DSS nhập hàng: nhu cầu delivered theo tháng, bang, danh mục. Đối soát: sum(revenue) = sum(price) delivered.';

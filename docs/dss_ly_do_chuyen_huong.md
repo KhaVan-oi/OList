@@ -1,5 +1,7 @@
 # Vì sao DSS chuyển từ phân khúc khách hàng sang nhập hàng và khuyến mãi
 
+> **Cập nhật:** phần what-if khuyến mãi mô tả dưới đây đã được bỏ khỏi hệ thống (xem [dss_danh_gia_de_xuat.md](dss_danh_gia_de_xuat.md)). Tài liệu này giữ nguyên để ghi lại lý do chuyển hướng ban đầu.
+
 ## Tóm tắt
 
 Kế hoạch ban đầu của nhóm cho Giai đoạn 5 là RFM, K-means, what-if và ma trận khuyến nghị theo phân khúc khách

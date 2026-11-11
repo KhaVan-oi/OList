@@ -1,4 +1,4 @@
-"""Lõi DSS nhập hàng và khuyến mãi. Thuần tính toán, không đụng cơ sở dữ liệu.
+"""Lõi DSS nhập hàng. Thuần tính toán, không đụng cơ sở dữ liệu.
 
 Mô hình dự báo trước 1 tháng (đơn giản có chủ đích, vì chuỗi chỉ ~20 tháng):
     naive  = tháng trước
@@ -7,7 +7,9 @@ Mô hình dự báo trước 1 tháng (đơn giản có chủ đích, vì chuỗ
     blend  = trung bình naive và holt
 
 Backtest: trượt theo thời gian. Mỗi bước chỉ dùng dữ liệu trước tháng cần dự báo.
-Khoảng đệm nhập hàng lấy từ sai số tương đối thực nghiệm của backtest, không giả định phân phối.
+Đệm nhập hàng là phân vị thực nghiệm của sai số tuyệt đối (thực tế - dự báo) trên backtest, nội suy tuyến tính,
+không giả định phân phối. Theo Trapero, Cardós, Kourentzes (Omega, 2019): tồn an toàn SS = Q(CSL) của sai số dự báo
+trên lead time. Ở đây lead time L = 1 tháng và mẫu chỉ ~12-14 tháng, nên đây là ước lượng thô.
 """
 
 from __future__ import annotations
@@ -88,49 +90,51 @@ def model_metrics(rows, model) -> dict:
     return {"wape": wape, "mape": mape, "bias": bias, "n": len(rows)}
 
 
-def pick_model(rows) -> str:
-    """Mô hình có WAPE thấp nhất trên backtest. Lưu ý: chọn và đo trên cùng cửa sổ, nên hơi lạc quan."""
-    scored = [(model_metrics(rows, m)["wape"], m) for m in MODELS]
-    scored = [(w, m) for w, m in scored if w is not None]
-    if not scored:
-        return "naive"
-    return min(scored)[1]
+MIN_ERRORS = 3  # số sai số tối thiểu để tính đệm. Ít hơn thì đệm = 0
 
 
-def relative_errors(rows, model) -> list[float]:
-    """actual / forecast - 1. Dương nghĩa là cầu vượt dự báo (nguy cơ thiếu hàng)."""
-    return [r["actual"] / r[model] - 1.0 for r in rows if r[model] > 0]
+def forecast_errors(rows, model) -> list[float]:
+    """actual - forecast, cùng đơn vị với chuỗi (món hoặc R$). Dương nghĩa là cầu vượt dự báo (nguy cơ thiếu hàng)."""
+    return [r["actual"] - r[model] for r in rows if r[model] > 0]
 
 
 def _quantile(values, q):
-    return float(np.quantile(np.asarray(values, dtype=float), q, method="higher"))
+    return float(np.quantile(np.asarray(values, dtype=float), q, method="linear"))
+
+
+def _buffer(errors, service: float) -> float:
+    """Đệm = phân vị `service` của sai số. Có thể âm khi mô hình thường dự báo cao hơn thực tế."""
+    return _quantile(errors, service) if len(errors) >= MIN_ERRORS else 0.0
 
 
 def order_plan(forecast: float, errors, service: float) -> dict:
-    """Lượng nhập = dự báo × (1 + phân vị `service` của sai số tương đối)."""
-    if len(errors) < 3:
-        multiplier = 1.0
-    else:
-        multiplier = max(1.0 + _quantile(errors, service), 0.0)
+    """Lượng nhập = max(dự báo + đệm, 0), đệm là phân vị `service` của sai số tuyệt đối.
+
+    `buffer` là đệm đúng đơn vị. `buffer_pct` (= đệm / dự báo) chỉ để hiển thị.
+    """
+    buffer = _buffer(errors, service)
     return {
         "service": service,
-        "multiplier": multiplier,
-        "quantity": forecast * multiplier,
-        "buffer_pct": (multiplier - 1.0) * 100.0,
+        "buffer": buffer,
+        "buffer_pct": buffer / forecast * 100.0 if forecast > 0 else 0.0,
+        "quantity": max(forecast + buffer, 0.0),
+        "n_errors": len(errors),
     }
 
 
-SERVICE_LEVELS = (0.5, 0.7, 0.8, 0.9, 0.95, 0.99)
+# Các mức phục vụ mục tiêu 85/90/95/99% đúng như Trapero, Cardós, Kourentzes (Omega 84, 2019; cũng là các mức
+# trong bài IJF 35, 2019 của nhóm, mục 4.3). Bài nói mức doanh nghiệp thường nhắm tới nằm trong khoảng 85-99%.
+SERVICE_LEVELS = (0.85, 0.9, 0.95, 0.99)
 
 
 def tradeoff(rows, model) -> list[dict]:
     """Đánh đổi thiếu hàng và dư hàng, đo bằng leave-one-out.
 
-    Với mỗi tháng t, hệ số đệm chỉ học từ các tháng KHÁC t. Vì vậy tỷ lệ thiếu hàng thu được
-    là thước đo thực nghiệm, không phải cam kết lý thuyết của phân vị.
+    Với mỗi tháng t, đệm chỉ học từ các tháng KHÁC t, rồi lượng nhập = dự báo tháng t + đệm. Vì vậy tỷ lệ
+    thiếu hàng thu được là thước đo thực nghiệm, không phải cam kết lý thuyết của phân vị.
     """
     usable = [r for r in rows if r[model] > 0 and r["actual"] > 0]
-    errors = [r["actual"] / r[model] - 1.0 for r in usable]
+    errors = [r["actual"] - r[model] for r in usable]
     out = []
     for service in SERVICE_LEVELS:
         stockouts = 0
@@ -138,8 +142,7 @@ def tradeoff(rows, model) -> list[dict]:
         short = []
         for i, r in enumerate(usable):
             others = errors[:i] + errors[i + 1:]
-            multiplier = max(1.0 + _quantile(others, service), 0.0) if len(others) >= 3 else 1.0
-            qty = r[model] * multiplier
+            qty = max(r[model] + _buffer(others, service), 0.0)
             actual = r["actual"]
             if actual > qty:
                 stockouts += 1
@@ -156,80 +159,3 @@ def tradeoff(rows, model) -> list[dict]:
             }
         )
     return out
-
-
-def event_uplift(months, values, event="2017-11", base=("2017-09", "2017-10")):
-    """Mức tăng của tháng sự kiện so với trung bình hai tháng liền trước. Chỉ là tham chiếu quan sát."""
-    idx = {m: i for i, m in enumerate(months)}
-    if event not in idx or any(b not in idx for b in base):
-        return None
-    base_avg = float(np.mean([values[idx[b]] for b in base]))
-    if base_avg <= 0:
-        return None
-    return float(values[idx[event]] / base_avg - 1.0)
-
-
-# ----------------------------- What-if khuyến mãi -----------------------------
-
-UPLIFT_GRID = (0.0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.8)
-DISCOUNT_GRID = (0.05, 0.10, 0.15, 0.20, 0.25)
-REALIZATION = (0.0, 0.5, 1.0, 1.5)
-
-
-def breakeven_uplift(discount: float, margin: float):
-    """Mức tăng cầu tối thiểu để lợi nhuận không giảm. (1+u)(m-d) >= m. Bỏ qua hàng dư."""
-    if margin <= discount:
-        return None
-    return discount / (margin - discount)
-
-
-def sensitivity_grid(margin: float) -> list[dict]:
-    """Đổi lợi nhuận (%) so với không khuyến mãi, theo (mức tăng cầu × mức giảm giá). Không tính hàng dư."""
-    rows = []
-    for discount in DISCOUNT_GRID:
-        cells = []
-        for uplift in UPLIFT_GRID:
-            change = ((1 + uplift) * (margin - discount) / margin - 1.0) * 100.0
-            cells.append({"uplift": uplift, "profit_change_pct": change})
-        rows.append({"discount": discount, "cells": cells})
-    return rows
-
-
-def promo_scenarios(forecast_units, price, uplift, discount, margin, multiplier, loss=0.2) -> dict:
-    """So sánh có và không khuyến mãi, khi nhập theo dự báo × hệ số đệm.
-
-    lợi nhuận = hàng bán × (giá bán - giá vốn) - hàng dư × giá vốn × loss
-    `loss` là tỷ lệ giá vốn của hàng dư bị mất (lưu kho, giảm giá thanh lý). Là giả định của người dùng.
-    loss = 0 cho đúng công thức hòa vốn lý thuyết. Cầu cơ sở lấy bằng dự báo (kỳ vọng).
-    """
-    cost_unit = price * (1.0 - margin)
-    qty_base = forecast_units * multiplier
-    base_sold = min(qty_base, forecast_units)
-    base_leftover = max(qty_base - forecast_units, 0.0)
-    base_profit = base_sold * (price - cost_unit) - base_leftover * cost_unit * loss
-
-    qty_promo = forecast_units * (1.0 + uplift) * multiplier
-    rows = []
-    for ratio in REALIZATION:
-        demand = forecast_units * (1.0 + uplift * ratio)
-        sold = min(qty_promo, demand)
-        leftover = max(qty_promo - demand, 0.0)
-        short = max(demand - qty_promo, 0.0)
-        profit = sold * (price * (1.0 - discount) - cost_unit) - leftover * cost_unit * loss
-        rows.append(
-            {
-                "realization": ratio,
-                "demand_units": demand,
-                "sold_units": sold,
-                "leftover_units": leftover,
-                "shortfall_units": short,
-                "profit": profit,
-                "profit_change": profit - base_profit,
-                "profit_change_pct": (profit - base_profit) / abs(base_profit) * 100.0 if base_profit else None,
-            }
-        )
-    return {
-        "baseline": {"order_units": qty_base, "profit": base_profit},
-        "promo_order_units": qty_promo,
-        "scenarios": rows,
-    }

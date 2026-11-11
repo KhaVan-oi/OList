@@ -1,10 +1,9 @@
-"""DSS nhập hàng và khuyến mãi. Dữ liệu từ dw.v_dss_monthly_demand qua QueryGateway.
+"""DSS nhập hàng. Dữ liệu từ dw.v_dss_monthly_demand qua QueryGateway.
 
 Endpoint:
     /api/dss/options    bang, danh mục, khoảng tháng dùng cho DSS
     /api/dss/forecast   dự báo tháng tới, backtest, lượng nhập đề xuất, đường đánh đổi
     /api/dss/accuracy   độ chính xác backtest theo mức tổng hợp (tổng, bang, danh mục)
-    /api/dss/whatif     khuyến mãi: hòa vốn, độ nhạy, kịch bản hàng dư và thiếu
 """
 
 import re
@@ -15,9 +14,12 @@ from app.common.http import ok, screen_endpoint
 from app.common.query_gateway import QueryGateway
 from app.features.dss import forecast as fc
 
-# Cửa sổ lịch sử đủ tháng. 2016 quá thưa (có tháng không có đơn), 2018-09 trở đi chưa có đơn delivered.
+# Đầu cửa sổ lịch sử cố định: 2016 quá thưa (có tháng không có đơn).
+# Cuối cửa sổ lấy từ dữ liệu (xem _history_end): tháng đầy đủ gần nhất trong view.
 HISTORY_START = "2017-01"
-HISTORY_END = "2018-08"
+# Một tháng cuối chỉ tính là "đầy đủ" nếu số món >= tỷ lệ này của trung vị các tháng trong cửa sổ.
+# Tránh tháng cuối mới nạp dở (vài đơn) bị coi là tháng thật rồi kéo dự báo xuống.
+COMPLETE_MONTH_RATIO = 0.3
 
 _STATE = re.compile(r"^[A-Z]{2}$")
 _METRICS = {"units": "units", "revenue": "revenue"}  # whitelist cột, không nối chuỗi từ request
@@ -25,9 +27,31 @@ _TOP_STATES = 10
 _TOP_CATEGORIES = 15
 
 
-def _months():
+def _history_end(gateway):
+    """Tháng đầy đủ gần nhất ('YYYY-MM') trong dw.v_dss_monthly_demand, tính từ HISTORY_START."""
+    rows = gateway.fetch_all(
+        """
+        SELECT to_char(month_start, 'YYYY-MM') AS month, sum(units) AS units
+        FROM dw.v_dss_monthly_demand
+        WHERE month_start >= %s
+        GROUP BY 1
+        ORDER BY 1
+        """,
+        (f"{HISTORY_START}-01",),
+    )
+    if not rows:
+        raise ValueError("Không có dữ liệu DSS từ " + HISTORY_START)
+    units = sorted(float(row["units"]) for row in rows)
+    median = units[len(units) // 2] if len(units) % 2 else (units[len(units) // 2 - 1] + units[len(units) // 2]) / 2
+    complete = [row["month"] for row in rows if float(row["units"]) >= COMPLETE_MONTH_RATIO * median]
+    if len(complete) <= fc.MIN_TRAIN:
+        raise ValueError("Không đủ tháng dữ liệu để dự báo")
+    return complete[-1]
+
+
+def _months(history_end):
     year, month = (int(part) for part in HISTORY_START.split("-"))
-    end_year, end_month = (int(part) for part in HISTORY_END.split("-"))
+    end_year, end_month = (int(part) for part in history_end.split("-"))
     out = []
     while (year, month) <= (end_year, end_month):
         out.append(f"{year:04d}-{month:02d}")
@@ -45,8 +69,8 @@ def _next_month(label):
     return f"{year:04d}-{month:02d}"
 
 
-def _bounds():
-    return f"{HISTORY_START}-01", f"{HISTORY_END}-01"
+def _bounds(history_end):
+    return f"{HISTORY_START}-01", f"{history_end}-01"
 
 
 def _scope():
@@ -86,9 +110,9 @@ def _number(name, default, low, high, scale=1.0):
     return value / scale
 
 
-def _series(gateway, scope, value):
+def _series(gateway, scope, value, history_end):
     """Chuỗi tháng đầy đủ (điền 0 cho tháng không có đơn) của units và revenue."""
-    start, end = _bounds()
+    start, end = _bounds(history_end)
     filters = {"total": "", "state": "AND customer_state = %s", "category": "AND category = %s"}
     params = [start, end] + ([value] if scope != "total" else [])
     rows = gateway.fetch_all(
@@ -103,7 +127,7 @@ def _series(gateway, scope, value):
         tuple(params),
     )
     by_month = {row["month"]: row for row in rows}
-    months = _months()
+    months = _months(history_end)
     return {
         "months": months,
         "units": [float(by_month.get(m, {}).get("units") or 0) for m in months],
@@ -111,10 +135,10 @@ def _series(gateway, scope, value):
     }
 
 
-def _panel(gateway, dimension, top_n):
+def _panel(gateway, dimension, top_n, history_end):
     """Các chuỗi của top_n bang hoặc danh mục lớn nhất (theo doanh thu trong cửa sổ)."""
     column = {"state": "customer_state", "category": "category"}[dimension]
-    start, end = _bounds()
+    start, end = _bounds(history_end)
     rows = gateway.fetch_all(
         f"""
         WITH top AS (
@@ -136,7 +160,7 @@ def _panel(gateway, dimension, top_n):
         """,
         (start, end, top_n, start, end),
     )
-    months = _months()
+    months = _months(history_end)
     keys = []
     for row in rows:
         if row["key"] not in keys:
@@ -176,8 +200,8 @@ def _metrics_table(rows):
 
 def _model():
     model = request.args.get("model", "blend")
-    if model != "auto" and model not in fc.MODELS:
-        raise ValueError("model phải là auto, naive, ma3, holt hoặc blend")
+    if model not in fc.MODELS:
+        raise ValueError("model phải là naive, ma3, holt hoặc blend")
     return model
 
 
@@ -189,17 +213,15 @@ def _forecast_bundle(series, metric, service, exclude_event=False, model="blend"
     values = series[metric]
     months = series["months"]
     rows = _with_months(fc.backtest(values), months)
-    best = fc.pick_model(rows)
-    chosen = best if model == "auto" else model
+    chosen = model
     next_forecasts = fc.forecast_all(values)
     error_rows = [row for row in rows if row["month"] not in fc.EVENT_MONTHS] if exclude_event else rows
-    errors = fc.relative_errors(error_rows, chosen)
+    errors = fc.forecast_errors(error_rows, chosen)
     plan = fc.order_plan(next_forecasts[chosen], errors, service)
     return {
         "rows": rows,
         "error_rows": error_rows,
         "chosen": chosen,
-        "best": best,
         "next_forecasts": next_forecasts,
         "errors": errors,
         "plan": plan,
@@ -212,7 +234,8 @@ def create_dss_blueprint(gateway: QueryGateway):
     @bp.route("/api/dss/options", methods=["GET"])
     @screen_endpoint
     def options():
-        start, end = _bounds()
+        history_end = _history_end(gateway)
+        start, end = _bounds(history_end)
         states = gateway.fetch_all(
             """
             SELECT customer_state AS code, sum(units) AS units, round(sum(revenue), 2) AS revenue
@@ -234,7 +257,7 @@ def create_dss_blueprint(gateway: QueryGateway):
             """,
             (start, end),
         )
-        months = _months()
+        months = _months(history_end)
         return ok(
             "dss-options",
             first_month=months[0],
@@ -251,10 +274,10 @@ def create_dss_blueprint(gateway: QueryGateway):
     def forecast():
         scope, value = _scope()
         metric = _metric()
-        service = _number("service", 0.9, 0.5, 0.99)
+        service = _number("service", 0.9, min(fc.SERVICE_LEVELS), max(fc.SERVICE_LEVELS))
         exclude_event = _exclude_event()
         model = _model()
-        series = _series(gateway, scope, value)
+        series = _series(gateway, scope, value, _history_end(gateway))
         if sum(series[metric]) <= 0:
             raise ValueError("Không có dữ liệu trong khoảng lịch sử cho lựa chọn này")
         bundle = _forecast_bundle(series, metric, service, exclude_event, model)
@@ -282,7 +305,6 @@ def create_dss_blueprint(gateway: QueryGateway):
             ],
             metrics=_metrics_table(rows),
             chosen_model=chosen,
-            best_model=bundle["best"],
             next={
                 "month": _next_month(months[-1]),
                 "forecast": bundle["next_forecasts"][chosen],
@@ -290,11 +312,11 @@ def create_dss_blueprint(gateway: QueryGateway):
             },
             order=bundle["plan"],
             tradeoff=fc.tradeoff(bundle["error_rows"], chosen),
-            event_uplift=fc.event_uplift(months, values),
             note=(
                 "Dự báo trước 1 tháng, backtest trượt theo thời gian. Mặc định dùng blend (trung bình naive và Holt). "
-                "Chế độ auto chọn mô hình có WAPE thấp nhất trên chính các tháng backtest, nên số đo hơi lạc quan. "
-                "Lượng đệm học từ sai số thực nghiệm."
+                "Đệm nhập hàng là phân vị của sai số tuyệt đối một tháng (thực tế - dự báo) trên các tháng backtest, "
+                "nội suy tuyến tính, theo Trapero và cộng sự (2019) với lead time 1 tháng. "
+                "Mẫu chỉ khoảng 12-14 tháng nên là ước lượng thô, không phải mức phục vụ đã hiệu chuẩn."
             ),
         )
 
@@ -302,7 +324,8 @@ def create_dss_blueprint(gateway: QueryGateway):
     @screen_endpoint
     def accuracy():
         metric = _metric()
-        total_series = _series(gateway, "total", "")
+        history_end = _history_end(gateway)
+        total_series = _series(gateway, "total", "", history_end)
         levels = []
 
         def summarize(label, series_list, months):
@@ -332,11 +355,11 @@ def create_dss_blueprint(gateway: QueryGateway):
 
         months = total_series["months"]
         levels.append(summarize("Tổng toàn kho", [("Tổng", total_series[metric])], months))
-        state_months, states = _panel(gateway, "state", _TOP_STATES)
+        state_months, states = _panel(gateway, "state", _TOP_STATES, history_end)
         levels.append(
             summarize(f"{len(states)} bang lớn", [(key, data[metric]) for key, data in states.items()], state_months)
         )
-        cat_months, cats = _panel(gateway, "category", _TOP_CATEGORIES)
+        cat_months, cats = _panel(gateway, "category", _TOP_CATEGORIES, history_end)
         levels.append(
             summarize(f"{len(cats)} danh mục lớn", [(key, data[metric]) for key, data in cats.items()], cat_months)
         )
@@ -350,56 +373,6 @@ def create_dss_blueprint(gateway: QueryGateway):
             note=(
                 "WAPE = tổng |thực tế - dự báo| / tổng thực tế, gộp qua mọi chuỗi và tháng. "
                 "wape_ex_event bỏ các tháng Black Friday 2017 và tháng sau. Hai cột báo cáo song song, không chọn lọc."
-            ),
-        )
-
-    @bp.route("/api/dss/whatif", methods=["GET"])
-    @screen_endpoint
-    def whatif():
-        scope, value = _scope()
-        service = _number("service", 0.9, 0.5, 0.99)
-        uplift = _number("uplift", 0.5, 0, 300, scale=100.0)
-        discount = _number("discount", 0.10, 0, 60, scale=100.0)
-        margin = _number("margin", 0.35, 1, 90, scale=100.0)
-        loss = _number("loss", 0.20, 0, 100, scale=100.0)
-        exclude_event = _exclude_event()
-        model = _model()
-        series = _series(gateway, scope, value)
-        if sum(series["units"]) <= 0:
-            raise ValueError("Không có dữ liệu trong khoảng lịch sử cho lựa chọn này")
-        bundle = _forecast_bundle(series, "units", service, exclude_event, model)
-        forecast_units = bundle["next_forecasts"][bundle["chosen"]]
-        recent_units = sum(series["units"][-3:])
-        recent_revenue = sum(series["revenue"][-3:])
-        if recent_units <= 0:
-            raise ValueError("Ba tháng gần nhất không có đơn nên không ước được giá bán")
-        price = recent_revenue / recent_units
-        plan = bundle["plan"]
-        promo = fc.promo_scenarios(forecast_units, price, uplift, discount, margin, plan["multiplier"], loss)
-        return ok(
-            "dss-whatif",
-            scope=scope,
-            value=value or None,
-            month=_next_month(series["months"][-1]),
-            inputs={
-                "uplift": uplift,
-                "discount": discount,
-                "margin": margin,
-                "service": service,
-                "loss": loss,
-                "exclude_event": exclude_event,
-                "model": bundle["chosen"],
-            },
-            baseline_forecast_units=forecast_units,
-            avg_price=price,
-            order_multiplier=plan["multiplier"],
-            breakeven_uplift=fc.breakeven_uplift(discount, margin),
-            observed_event_uplift=fc.event_uplift(series["months"], series["units"]),
-            sensitivity=fc.sensitivity_grid(margin),
-            promo=promo,
-            note=(
-                "Mức tăng cầu, mức giảm giá, biên lợi nhuận và tổn thất hàng dư là GIẢ ĐỊNH của người dùng, không suy ra từ dữ liệu. "
-                "Kho không có thí nghiệm khuyến mãi. Tháng Black Friday 2017 chỉ là điểm tham chiếu quan sát."
             ),
         )
 

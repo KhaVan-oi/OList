@@ -2,8 +2,8 @@ import { getJson } from '../../../lib/http.ts'
 
 export type DssScope = 'total' | 'state' | 'category'
 export type DssMetric = 'units' | 'revenue'
-export type DssModel = 'auto' | 'blend' | 'naive' | 'ma3' | 'holt'
-export type ModelName = Exclude<DssModel, 'auto'>
+export type ModelName = 'blend' | 'naive' | 'ma3' | 'holt'
+export type DssModel = ModelName
 
 export type DssSelection = {
   scope: DssScope
@@ -55,11 +55,16 @@ export type DssForecast = {
   backtest: BacktestRow[]
   metrics: ModelMetric[]
   chosen_model: ModelName
-  best_model: ModelName
   next: { month: string; forecast: number; by_model: Record<ModelName, number> }
-  order: { service: number; multiplier: number; quantity: number; buffer_pct: number }
+  /** `buffer` là đệm đúng đơn vị của chỉ số (món hoặc R$). `buffer_pct` chỉ để hiển thị. */
+  order: {
+    service: number
+    quantity: number
+    buffer: number
+    buffer_pct: number
+    n_errors: number
+  }
   tradeoff: TradeoffRow[]
-  event_uplift: number | null
   note: string
 }
 
@@ -76,48 +81,6 @@ export type DssAccuracy = {
   levels: AccuracyLevel[]
   test_window: { first: string; last: string; n_months: number }
   event_months: string[]
-  note: string
-}
-
-export type WhatIfInputs = { uplift: string; discount: string; margin: string; loss: string }
-
-/** Giả định minh họa, chưa dựa trên dữ liệu doanh nghiệp. */
-export const DEFAULT_WHATIF: WhatIfInputs = { uplift: '50', discount: '10', margin: '35', loss: '20' }
-
-export type WhatIfScenario = {
-  realization: number
-  demand_units: number
-  sold_units: number
-  leftover_units: number
-  shortfall_units: number
-  profit: number
-  profit_change: number
-  profit_change_pct: number | null
-}
-
-export type DssWhatIf = {
-  status: string
-  month: string
-  inputs: {
-    uplift: number
-    discount: number
-    margin: number
-    service: number
-    loss: number
-    exclude_event: boolean
-    model: ModelName
-  }
-  baseline_forecast_units: number
-  avg_price: number
-  order_multiplier: number
-  breakeven_uplift: number | null
-  observed_event_uplift: number | null
-  sensitivity: { discount: number; cells: { uplift: number; profit_change_pct: number }[] }[]
-  promo: {
-    baseline: { order_units: number; profit: number }
-    promo_order_units: number
-    scenarios: WhatIfScenario[]
-  }
   note: string
 }
 
@@ -142,13 +105,4 @@ export function getDssForecast(selection: DssSelection) {
 
 export function getDssAccuracy(metric: DssMetric) {
   return getJson<DssAccuracy>(`/api/dss/accuracy?metric=${metric}`)
-}
-
-export function getDssWhatIf(selection: DssSelection, inputs: WhatIfInputs) {
-  const query = scopeQuery(selection)
-  query.set('uplift', inputs.uplift)
-  query.set('discount', inputs.discount)
-  query.set('margin', inputs.margin)
-  query.set('loss', inputs.loss)
-  return getJson<DssWhatIf>(`/api/dss/whatif?${query}`)
 }
