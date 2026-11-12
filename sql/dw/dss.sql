@@ -1,5 +1,6 @@
--- Kho dữ liệu trên database olist_dw, schema dw.
--- Thiết kế chuẩn hóa theo yêu cầu tài liệu Fix.md
+-- Kho dữ liệu trên database olist_dw, schema dw (mô hình sao, Kimball & Ross 2013).
+-- Tên file là lịch sử ("dss" = database ban đầu), không liên quan phần DSS nhập hàng.
+-- Chạy lại file này sẽ DROP SCHEMA dw CASCADE: mọi view trong dw bị xóa theo; etl_pipeline.py tạo lại view DSS.
 
 DROP SCHEMA IF EXISTS dw CASCADE;
 CREATE SCHEMA dw;

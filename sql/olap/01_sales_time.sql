@@ -51,7 +51,7 @@ WHERE fco.order_status = 'delivered';
 -- Logic:
 --   1. Tổng hợp theo (year, month) với bộ lọc delivered.
 --   2. Tạo chuỗi tháng liên tục trong phạm vi dữ liệu.
---   3. LEFT JOIN → tháng thiếu → 0 (quy ước).
+--   3. LEFT JOIN → tháng không có giao dịch giữ NULL (không gán 0), ví dụ 2016-11.
 --   4. LAG() trên chuỗi đầy đủ → tháng trước là tháng lịch liền trước.
 --   5. MoM Growth với NULLIF để tránh chia 0.
 --   6. YTD bằng SUM() OVER (PARTITION BY year ORDER BY month) — reset mỗi năm.
@@ -164,180 +164,120 @@ ORDER BY year, month;
 
 
 -- =============================================================================
--- PHẦN 2: TỔNG HỢP THEO QUÝ — KPI + QoQ Growth + YTD
+-- PHẦN 2 + 3: TĂNG TRƯỞNG QUÝ (QoQ) VÀ NĂM (YoY) — SO SÁNH CÙNG KỲ
 -- =============================================================================
+-- Vì sao không lấy tổng cả kỳ chia tổng cả kỳ trước:
+--   Dữ liệu delivered chỉ phủ 2016-09..2018-08 và thiếu 2016-11. Năm 2016 có 3 tháng,
+--   năm 2018 có 8 tháng, quý 3/2018 có 2 tháng. Chia tổng cả kỳ thì tỷ lệ lẫn chênh lệch
+--   số tháng vào tăng trưởng:
+--     2018 (T1–T8) / 2017 (T1–T12)  = +21%   ← sai bản chất
+--     2018 (T1–T8) / 2017 (T1–T8)   = +141%  ← cùng kỳ
+--     Q3/2018 (2 tháng) / Q2/2018   ≈ −39%   ← chỉ vì thiếu tháng 9
+--
+-- Quy tắc cùng kỳ (like-for-like):
+--   YoY(Y) = Σ_{m∈M} X(Y,m) / Σ_{m∈M} X(Y−1,m) − 1,   M = tháng lịch có dữ liệu ở cả Y và Y−1
+--   QoQ(q) = như trên, ghép tháng thứ k của quý q với tháng thứ k của quý liền trước
+-- Tổng của kỳ vẫn là tổng đầy đủ. months_with_data / months_compared / is_partial cho người đọc
+-- biết tỷ lệ được tính trên bao nhiêu tháng.
+-- Cùng logic với backend/app/features/sales_time/growth.py (API màn Thời gian).
+
+-- 2. Theo quý
 WITH
-quarterly_raw AS (
-    SELECT
-        d.year,
-        d.quarter,
-        SUM(fs.price)         AS product_sales,
-        SUM(fs.freight_value) AS freight_value,
-        COUNT(*)              AS order_item_count
+monthly AS (
+    SELECT d.year, d.quarter, d.month,
+           SUM(fs.price)         AS product_sales,
+           SUM(fs.freight_value) AS freight_value,
+           COUNT(*)              AS order_item_count
     FROM dw.fact_sales fs
-    JOIN dw.dim_date d
-        ON fs.purchase_date_key = d.date_key
-    JOIN dw.fact_customer_order fco
-        ON fs.order_id = fco.order_id
+    JOIN dw.dim_date d              ON fs.purchase_date_key = d.date_key
+    JOIN dw.fact_customer_order fco ON fs.order_id = fco.order_id
     WHERE fco.order_status = 'delivered'
-    GROUP BY d.year, d.quarter
+    GROUP BY d.year, d.quarter, d.month
 ),
-
-quarter_series AS (
-    SELECT
-        EXTRACT(YEAR    FROM gs)::int AS year,
-        EXTRACT(QUARTER FROM gs)::int AS quarter
-    FROM generate_series(
-        (SELECT DATE_TRUNC('quarter', MIN(full_date)) FROM dw.dim_date
-         WHERE date_key IN (SELECT purchase_date_key FROM dw.fact_sales)),
-        (SELECT DATE_TRUNC('quarter', MAX(full_date)) FROM dw.dim_date
-         WHERE date_key IN (SELECT purchase_date_key FROM dw.fact_sales)),
-        INTERVAL '3 months'
-    ) AS gs
+period AS (
+    SELECT year, quarter,
+           SUM(product_sales) AS product_sales,
+           SUM(freight_value) AS freight_value,
+           SUM(order_item_count) AS order_item_count,
+           COUNT(*) AS months_with_data
+    FROM monthly
+    GROUP BY year, quarter
 ),
-
-quarterly_base AS (
-    SELECT
-        qs.year,
-        qs.quarter,
-        COALESCE(qr.product_sales,    0) AS product_sales,
-        COALESCE(qr.freight_value,    0) AS freight_value,
-        COALESCE(qr.order_item_count, 0) AS order_item_count
-    FROM quarter_series qs
-    LEFT JOIN quarterly_raw qr
-        ON qr.year = qs.year AND qr.quarter = qs.quarter
-),
-
-quarterly_with_metrics AS (
-    SELECT
-        year,
-        quarter,
-        product_sales,
-        freight_value,
-        order_item_count,
-
-        -- QoQ Growth
-        ROUND(
-            (product_sales - LAG(product_sales) OVER (ORDER BY year, quarter))
-            / NULLIF(LAG(product_sales) OVER (ORDER BY year, quarter), 0) * 100,
-        2) AS qoq_product_sales_pct,
-
-        ROUND(
-            (freight_value - LAG(freight_value) OVER (ORDER BY year, quarter))
-            / NULLIF(LAG(freight_value) OVER (ORDER BY year, quarter), 0) * 100,
-        2) AS qoq_freight_value_pct,
-
-        ROUND(
-            (order_item_count - LAG(order_item_count) OVER (ORDER BY year, quarter))
-            / NULLIF(LAG(order_item_count) OVER (ORDER BY year, quarter)::numeric, 0) * 100,
-        2) AS qoq_order_item_count_pct,
-
-        -- YTD theo quý (reset mỗi năm)
-        SUM(product_sales)    OVER (PARTITION BY year ORDER BY quarter) AS ytd_product_sales,
-        SUM(freight_value)    OVER (PARTITION BY year ORDER BY quarter) AS ytd_freight_value,
-        SUM(order_item_count) OVER (PARTITION BY year ORDER BY quarter) AS ytd_order_item_count
-
-    FROM quarterly_base
+same_period AS (
+    SELECT cur.year, cur.quarter,
+           SUM(cur.product_sales)     AS cur_sales,   SUM(prev.product_sales)     AS prev_sales,
+           SUM(cur.freight_value)     AS cur_freight, SUM(prev.freight_value)     AS prev_freight,
+           SUM(cur.order_item_count)  AS cur_items,   SUM(prev.order_item_count)  AS prev_items,
+           COUNT(*) AS months_compared
+    FROM monthly cur
+    JOIN monthly prev
+      ON prev.year * 4 + prev.quarter = cur.year * 4 + cur.quarter - 1   -- quý liền trước
+     AND mod(prev.month - 1, 3) = mod(cur.month - 1, 3)                  -- cùng vị trí tháng trong quý
+    GROUP BY cur.year, cur.quarter
 )
-
 SELECT
-    year,
-    quarter,
-    ROUND(product_sales,    2) AS product_sales,
-    ROUND(freight_value,    2) AS freight_value,
-    order_item_count,
-    qoq_product_sales_pct,
-    qoq_freight_value_pct,
-    qoq_order_item_count_pct,
-    ROUND(ytd_product_sales,    2) AS ytd_product_sales,
-    ROUND(ytd_freight_value,    2) AS ytd_freight_value,
-    ytd_order_item_count
-FROM quarterly_with_metrics
-ORDER BY year, quarter;
+    p.year,
+    p.quarter,
+    ROUND(p.product_sales, 2) AS product_sales,
+    ROUND(p.freight_value, 2) AS freight_value,
+    p.order_item_count,
+    ROUND((s.cur_sales   - s.prev_sales)   / NULLIF(s.prev_sales, 0)   * 100, 2) AS qoq_product_sales_pct,
+    ROUND((s.cur_freight - s.prev_freight) / NULLIF(s.prev_freight, 0) * 100, 2) AS qoq_freight_value_pct,
+    ROUND((s.cur_items   - s.prev_items)::numeric / NULLIF(s.prev_items, 0) * 100, 2) AS qoq_order_item_count_pct,
+    p.months_with_data,
+    COALESCE(s.months_compared, 0) AS months_compared,
+    p.months_with_data < 3         AS is_partial
+FROM period p
+LEFT JOIN same_period s ON s.year = p.year AND s.quarter = p.quarter
+ORDER BY p.year, p.quarter;
 
 
--- =============================================================================
--- PHẦN 3: TỔNG HỢP THEO NĂM — KPI + YoY Growth
--- =============================================================================
+-- 3. Theo năm
 WITH
-yearly_raw AS (
-    SELECT
-        d.year,
-        SUM(fs.price)         AS product_sales,
-        SUM(fs.freight_value) AS freight_value,
-        COUNT(*)              AS order_item_count
+monthly AS (
+    SELECT d.year, d.month,
+           SUM(fs.price)         AS product_sales,
+           SUM(fs.freight_value) AS freight_value,
+           COUNT(*)              AS order_item_count
     FROM dw.fact_sales fs
-    JOIN dw.dim_date d
-        ON fs.purchase_date_key = d.date_key
-    JOIN dw.fact_customer_order fco
-        ON fs.order_id = fco.order_id
+    JOIN dw.dim_date d              ON fs.purchase_date_key = d.date_key
+    JOIN dw.fact_customer_order fco ON fs.order_id = fco.order_id
     WHERE fco.order_status = 'delivered'
-    GROUP BY d.year
+    GROUP BY d.year, d.month
 ),
-
-year_series AS (
-    SELECT generate_series(
-        (SELECT MIN(year) FROM dw.dim_date
-         WHERE date_key IN (SELECT purchase_date_key FROM dw.fact_sales)),
-        (SELECT MAX(year) FROM dw.dim_date
-         WHERE date_key IN (SELECT purchase_date_key FROM dw.fact_sales))
-    )::int AS year
+period AS (
+    SELECT year,
+           SUM(product_sales) AS product_sales,
+           SUM(freight_value) AS freight_value,
+           SUM(order_item_count) AS order_item_count,
+           COUNT(*) AS months_with_data
+    FROM monthly
+    GROUP BY year
 ),
-
-yearly_base AS (
-    SELECT
-        ys.year,
-        COALESCE(yr.product_sales,    0) AS product_sales,
-        COALESCE(yr.freight_value,    0) AS freight_value,
-        COALESCE(yr.order_item_count, 0) AS order_item_count
-    FROM year_series ys
-    LEFT JOIN yearly_raw yr USING (year)
-),
-
-yearly_with_metrics AS (
-    SELECT
-        year,
-        product_sales,
-        freight_value,
-        order_item_count,
-
-        -- YoY Growth
-        ROUND(
-            (product_sales - LAG(product_sales) OVER (ORDER BY year))
-            / NULLIF(LAG(product_sales) OVER (ORDER BY year), 0) * 100,
-        2) AS yoy_product_sales_pct,
-
-        ROUND(
-            (freight_value - LAG(freight_value) OVER (ORDER BY year))
-            / NULLIF(LAG(freight_value) OVER (ORDER BY year), 0) * 100,
-        2) AS yoy_freight_value_pct,
-
-        ROUND(
-            (order_item_count - LAG(order_item_count) OVER (ORDER BY year))
-            / NULLIF(LAG(order_item_count) OVER (ORDER BY year)::numeric, 0) * 100,
-        2) AS yoy_order_item_count_pct,
-
-        -- YTD cấp năm = chính tổng năm đó
-        product_sales    AS ytd_product_sales,
-        freight_value    AS ytd_freight_value,
-        order_item_count AS ytd_order_item_count
-
-    FROM yearly_base
+same_period AS (
+    SELECT cur.year,
+           SUM(cur.product_sales)     AS cur_sales,   SUM(prev.product_sales)     AS prev_sales,
+           SUM(cur.freight_value)     AS cur_freight, SUM(prev.freight_value)     AS prev_freight,
+           SUM(cur.order_item_count)  AS cur_items,   SUM(prev.order_item_count)  AS prev_items,
+           COUNT(*) AS months_compared
+    FROM monthly cur
+    JOIN monthly prev ON prev.year = cur.year - 1 AND prev.month = cur.month   -- cùng tháng năm trước
+    GROUP BY cur.year
 )
-
 SELECT
-    year,
-    ROUND(product_sales,    2) AS product_sales,
-    ROUND(freight_value,    2) AS freight_value,
-    order_item_count,
-    yoy_product_sales_pct,
-    yoy_freight_value_pct,
-    yoy_order_item_count_pct,
-    ROUND(ytd_product_sales,    2) AS ytd_product_sales,
-    ROUND(ytd_freight_value,    2) AS ytd_freight_value,
-    ytd_order_item_count
-FROM yearly_with_metrics
-ORDER BY year;
+    p.year,
+    ROUND(p.product_sales, 2) AS product_sales,
+    ROUND(p.freight_value, 2) AS freight_value,
+    p.order_item_count,
+    ROUND((s.cur_sales   - s.prev_sales)   / NULLIF(s.prev_sales, 0)   * 100, 2) AS yoy_product_sales_pct,
+    ROUND((s.cur_freight - s.prev_freight) / NULLIF(s.prev_freight, 0) * 100, 2) AS yoy_freight_value_pct,
+    ROUND((s.cur_items   - s.prev_items)::numeric / NULLIF(s.prev_items, 0) * 100, 2) AS yoy_order_item_count_pct,
+    p.months_with_data,
+    COALESCE(s.months_compared, 0) AS months_compared,
+    p.months_with_data < 12        AS is_partial
+FROM period p
+LEFT JOIN same_period s ON s.year = p.year
+ORDER BY p.year;
 
 
 -- =============================================================================
@@ -465,7 +405,7 @@ ORDER BY d.full_date;
 -- =============================================================================
 -- PHẦN 6: SLICE — Cố định một chiều, phân tích tập dữ liệu con
 -- =============================================================================
--- Ví dụ: Slice year = 2017, xem KPI theo tháng kèm MoM.
+-- Ví dụ: Slice year = 2017, xem KPI theo tháng kèm MoM (so tháng liền trước, vốn đã cùng độ dài).
 -- Tháng 1/2017 cần tháng 12/2016 làm kỳ tham chiếu → lấy thêm nhưng không hiển thị.
 
 WITH
@@ -659,11 +599,13 @@ month_year_series AS (
          generate_series(1, 12)      AS m
 ),
 
+-- Giữ NULL cho tháng không có giao dịch (2016-01..08, 2016-11, 2018-09..12). Gán 0 sẽ sinh
+-- MoM = −100% giả ở tháng dữ liệu kết thúc và NULL ở tháng kế tiếp, lẫn với sụt giảm thật.
 full_base AS (
     SELECT
         mys.y   AS year,
         mys.m   AS month,
-        COALESCE(ma.product_sales, 0) AS product_sales
+        ma.product_sales
     FROM month_year_series mys
     LEFT JOIN monthly_all ma
         ON ma.year = mys.y AND ma.month = mys.m

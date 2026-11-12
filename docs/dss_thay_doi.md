@@ -15,11 +15,10 @@ danh mục):
 What-if khuyến mãi đã được bỏ: dữ liệu không có giá vốn hay đợt khuyến mãi nào để kiểm chứng, nên kết quả hoàn toàn do
 giả định của người dùng. Phần kịch bản của trang là đường đánh đổi thiếu hàng và dư hàng, tính từ backtest.
 
-Đầu trang có **khung "Kết luận cho người quyết định"**: hai ý bằng câu thường (nên nhập bao nhiêu; sai số so với baseline "tháng
-trước" và nhận xét mô hình hơn, ngang hay kém baseline). Baseline cũng được
-ghi cạnh con số WAPE ở thẻ chỉ số, nhãn "baseline" ở bảng so sánh mô hình và ở tiêu đề cột bảng độ chính xác theo mức tổng hợp.
-Nhận xét "hơn baseline" dùng ngưỡng cố định trên chênh lệch WAPE: trên 2 điểm phần trăm là "tốt hơn", từ 0,5 đến 2 là
-"chỉ hơn", trong ±0,5 là "ngang", dưới −0,5 là "kém".
+Đầu trang là **thẻ trả lời** "Nên nhập khoảng … món" kèm ba con số: dự báo bán, dự phòng an toàn, và mức lệch
+thường gặp (WAPE backtest). Ngưỡng nhận xét "hơn / ngang / kém baseline" của bản trước **đã bị bỏ** (commit 828cb02),
+vì đó là ngưỡng đặt tay, không có cơ sở thống kê. Thay vào đó, bảng chi tiết kỹ thuật ghi nhãn "mốc so sánh" cho naive
+và báo cáo hai thước đo có nguồn: WAPE (Kolassa và Schütz, 2007) và MASE (Hyndman và Koehler, 2006).
 
 ### Mô hình
 
@@ -127,10 +126,10 @@ python backend/run.py          # API cổng 5050
 cd frontend && npm run dev     # mở /quyet-dinh
 ```
 
-Lưu ý: `etl_pipeline.py` bắt đầu bằng `DROP SCHEMA dw CASCADE` (trong `sql/dw/dss.sql`, đây là DDL của kho theo Fix.md,
-không liên quan tên "DSS"), nên view bị xóa theo. Vì vậy `run_pipeline` có thêm một bước sau phần kiểm tra để chạy
-`sql/dss/01_demand_mart.sql`. Bước này **chưa được chạy thử qua một lần ETL đầy đủ**, chỉ kiểm tra bằng đọc code và
-chạy view độc lập. `run_dss_01.py` vẫn giữ vai trò đối soát.
+Lưu ý: `etl_pipeline.py` chạy `sql/dw/dss.sql`, file này bắt đầu bằng `DROP SCHEMA dw CASCADE`. Tên file là lịch
+sử, không liên quan đến phần "DSS". Lệnh này xóa view DSS, nên `run_pipeline` có thêm một bước sau nghiệm thu để chạy
+lại `sql/dss/01_demand_mart.sql`. Bước này **đã được chạy qua một lần ETL đầy đủ ngày 12/11/2026**, và
+`run_dss_01.py` sau đó đối soát PASS (13.221.498,11 R$; 110.197 món). `run_dss_01.py` vẫn giữ vai trò đối soát.
 
 ## 5. Đã kiểm tra những gì
 
@@ -150,12 +149,14 @@ chạy view độc lập. `run_dss_01.py` vẫn giữ vai trò đối soát.
 | Lượng nhập đề xuất ở phân vị 90% (đã bỏ Black Friday khỏi mẫu sai số) | 7.518,82 món (đệm +453,64 món, +6,4%, 12 tháng trong mẫu) |
 | Tỷ lệ tháng thiếu hàng thực nghiệm (leave-one-out) ở phân vị 90% | 16,7% (2 trên 12 tháng) |
 | WAPE toàn kho: kết hợp, tháng trước | 11,2%, 12,2% (bỏ Black Friday: 7,4%, 7,5%) |
+| MASE toàn kho / 10 bang / 15 danh mục: kết hợp | 0,89 / 1,01 / 1,23 (tháng trước: 0,97 / 1,12 / 1,27) |
 | WAPE 10 bang lớn: kết hợp, tháng trước | 13,0%, 15,0% |
 | WAPE 15 danh mục lớn: kết hợp, tháng trước | 20,0%, 20,7% |
 
 ## 6. Chưa làm hoặc chưa kiểm tra
 
-- **Chưa có unit test** cho `forecast.py`. Đã kiểm tra tay bằng API như bảng trên.
+- Unit test cho phần tính toán thuần (`forecast.py`, SQL tăng trưởng của màn Thời gian) ở `backend/tests/` (16 test,
+  chạy `python -m unittest discover -s backend/tests -t backend`). Route cần DB vẫn chỉ được kiểm bằng Flask test client.
 - **Chưa thao tác thử trên trình duyệt** các lựa chọn khác (đổi sang bang, danh mục, bấm "Tính lại"): ảnh chụp chỉ
   là trang mặc định. API của các phạm vi đó đã được gọi và trả đúng, nhưng giao diện chưa được nhìn thấy ở các trạng thái này.
   Chưa kiểm tra màn hình hẹp và trình duyệt khác.
@@ -164,7 +165,4 @@ chạy view độc lập. `run_dss_01.py` vẫn giữ vai trò đối soát.
   của Giai đoạn 5. Nhóm nên cập nhật cho khớp với hướng mới.
 - Các số "Kết quả đo được" ở mục 5 được cập nhật theo công thức đệm tuyệt đối. Ảnh chụp màn hình cũ (nếu có) không còn
   khớp với giao diện.
-- Bước tạo view trong `etl_pipeline.py` (mục 4) chưa được chạy thử qua một lần ETL đầy đủ. Comment của view đã sửa
-  trong file SQL, nhưng view đang có trong DB vẫn mang comment cũ cho đến lần ETL hoặc `run_dss_01.py` kế tiếp.
 - Thư mục `frontend/dist` được build lại (đã nằm trong `.gitignore`).
-- Thư mục không phải git repo nên không có commit nào được tạo.

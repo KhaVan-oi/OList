@@ -22,6 +22,11 @@ const oneDecimal = new Intl.NumberFormat('vi-VN', { maximumFractionDigits: 1 })
 /** Số thập phân một chữ số, dấu phẩy kiểu Việt Nam (17,2). */
 export const decimal1 = (value: number) => oneDecimal.format(value)
 
+const twoDecimals = new Intl.NumberFormat('vi-VN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+
+/** MASE là tỷ số không đơn vị, hiển thị 2 chữ số thập phân (0,89). */
+export const masePlain = (value: number | null | undefined) => (value == null ? 'Trống' : twoDecimals.format(value))
+
 /** '2018-09' thành 'tháng 09/2018'. */
 export function monthLabel(month: string) {
   const [year, mm] = month.split('-')

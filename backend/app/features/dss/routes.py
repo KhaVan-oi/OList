@@ -189,6 +189,7 @@ def _metrics_table(rows):
             {
                 "model": model,
                 "wape": full["wape"],
+                "mase": full["mase"],
                 "mape": full["mape"],
                 "bias": full["bias"],
                 "wape_ex_event": trimmed["wape"],
@@ -338,11 +339,13 @@ def create_dss_blueprint(gateway: QueryGateway):
                         "name": name,
                         "wape": fc.model_metrics(rows, "blend")["wape"],
                         "wape_naive": fc.model_metrics(rows, "naive")["wape"],
+                        "mase": fc.model_metrics(rows, "blend")["mase"],
                     }
                 )
                 for model in fc.MODELS:
                     pooled[model].extend(
-                        {"actual": row["actual"], model: row[model], "month": row["month"]} for row in rows
+                        {"actual": row["actual"], model: row[model], "month": row["month"], "scale": row["scale"]}
+                        for row in rows
                     )
             models = []
             for model in fc.MODELS:
@@ -350,7 +353,9 @@ def create_dss_blueprint(gateway: QueryGateway):
                 trimmed = [row for row in rows if row["month"] not in fc.EVENT_MONTHS]
                 full = fc.model_metrics(rows, model)
                 cut = fc.model_metrics(trimmed, model)
-                models.append({"model": model, "wape": full["wape"], "wape_ex_event": cut["wape"]})
+                models.append(
+                    {"model": model, "wape": full["wape"], "wape_ex_event": cut["wape"], "mase": full["mase"]}
+                )
             return {"level": label, "n_series": len(series_list), "models": models, "series": per_series}
 
         months = total_series["months"]
@@ -371,7 +376,9 @@ def create_dss_blueprint(gateway: QueryGateway):
             test_window={"first": months[fc.MIN_TRAIN], "last": months[-1], "n_months": n_test},
             event_months=list(fc.EVENT_MONTHS),
             note=(
-                "WAPE = tổng |thực tế - dự báo| / tổng thực tế, gộp qua mọi chuỗi và tháng. "
+                "WAPE = tổng |thực tế - dự báo| / tổng thực tế, gộp qua mọi chuỗi và tháng (Kolassa và Schütz, 2007). "
+                "MASE = trung bình |sai số| chia MAE của naive một bước trên lịch sử tại thời điểm dự báo "
+                "(Hyndman và Koehler, 2006); MASE < 1 nghĩa là sai số nhỏ hơn naive trong mẫu. "
                 "wape_ex_event bỏ các tháng Black Friday 2017 và tháng sau. Hai cột báo cáo song song, không chọn lọc."
             ),
         )

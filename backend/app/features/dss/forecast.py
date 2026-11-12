@@ -7,6 +7,7 @@ Mô hình dự báo trước 1 tháng (đơn giản có chủ đích, vì chuỗ
     blend  = trung bình naive và holt
 
 Backtest: trượt theo thời gian. Mỗi bước chỉ dùng dữ liệu trước tháng cần dự báo.
+Đo sai số: WAPE (tỷ số MAD/Mean, Kolassa & Schütz 2007) và MASE (Hyndman & Koehler 2006).
 Đệm nhập hàng là phân vị thực nghiệm của sai số tuyệt đối (thực tế - dự báo) trên backtest, nội suy tuyến tính,
 không giả định phân phối. Theo Trapero, Cardós, Kourentzes (Omega, 2019): tồn an toàn SS = Q(CSL) của sai số dự báo
 trên lead time. Ở đây lead time L = 1 tháng và mẫu chỉ ~12-14 tháng, nên đây là ước lượng thô.
@@ -65,11 +66,30 @@ def forecast_all(history) -> dict[str, float]:
     return {"naive": naive, "ma3": ma3, "holt": holt, "blend": (naive + holt) / 2}
 
 
+def naive_scale(history) -> float | None:
+    """MAE trong mẫu của dự báo naive một bước: mean(|y_i − y_{i−1}|), i = 2..n.
+
+    Là mẫu số của sai số tỷ lệ (scaled error) trong MASE, Hyndman & Koehler (2006), IJF 22(4), 679–688.
+    Trả None khi chuỗi phẳng hoàn toàn (mẫu số bằng 0, MASE không xác định).
+    """
+    y = np.asarray(history, dtype=float)
+    if len(y) < 2:
+        return None
+    scale = float(np.mean(np.abs(np.diff(y))))
+    return scale if scale > 0 else None
+
+
 def backtest(values) -> list[dict]:
-    """Mỗi bước t (từ MIN_TRAIN) dự báo values[t] chỉ từ values[:t]."""
+    """Mỗi bước t (từ MIN_TRAIN) dự báo values[t] chỉ từ values[:t].
+
+    `scale` là MAE naive trong mẫu values[:t], tức chỉ dùng thông tin có tại thời điểm dự báo.
+    """
     rows = []
     for t in range(MIN_TRAIN, len(values)):
-        rows.append({"index": t, "actual": float(values[t]), **forecast_all(values[:t])})
+        history = values[:t]
+        rows.append(
+            {"index": t, "actual": float(values[t]), "scale": naive_scale(history), **forecast_all(history)}
+        )
     return rows
 
 
@@ -77,17 +97,30 @@ def _abs_err(rows, model):
     return sum(abs(r["actual"] - r[model]) for r in rows)
 
 
+def mase(rows, model) -> float | None:
+    """MASE = trung bình |e_t| / scale_t (Hyndman & Koehler 2006). < 1: sai số nhỏ hơn naive một bước trong mẫu.
+
+    Không phụ thuộc đơn vị nên gộp được nhiều chuỗi (bang, danh mục) có quy mô khác nhau.
+    Bỏ qua dòng có scale None (chuỗi phẳng).
+    """
+    scaled = [abs(r["actual"] - r[model]) / r["scale"] for r in rows if r.get("scale")]
+    return float(np.mean(scaled)) if scaled else None
+
+
 def model_metrics(rows, model) -> dict:
-    """WAPE, MAPE, thiên lệch trên một tập dòng backtest."""
+    """WAPE, MASE, MAPE, thiên lệch trên một tập dòng backtest.
+
+    WAPE = Σ|thực tế − dự báo| / Σ thực tế, tức tỷ số MAD/Mean của Kolassa & Schütz (2007), Foresight 6, 40–43.
+    """
     if not rows:
-        return {"wape": None, "mape": None, "bias": None, "n": 0}
+        return {"wape": None, "mase": None, "mape": None, "bias": None, "n": 0}
     total = sum(r["actual"] for r in rows)
     if total <= 0:
-        return {"wape": None, "mape": None, "bias": None, "n": len(rows)}
+        return {"wape": None, "mase": mase(rows, model), "mape": None, "bias": None, "n": len(rows)}
     wape = _abs_err(rows, model) / total
     mape = float(np.mean([abs(r["actual"] - r[model]) / max(r["actual"], 1.0) for r in rows]))
     bias = (sum(r[model] for r in rows) - total) / total
-    return {"wape": wape, "mape": mape, "bias": bias, "n": len(rows)}
+    return {"wape": wape, "mase": mase(rows, model), "mape": mape, "bias": bias, "n": len(rows)}
 
 
 MIN_ERRORS = 3  # số sai số tối thiểu để tính đệm. Ít hơn thì đệm = 0

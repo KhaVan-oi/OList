@@ -2,7 +2,8 @@
 ## HỆ THỐNG KHO DỮ LIỆU & PHÂN TÍCH ĐA CHIỀU THƯƠNG MẠI ĐIỆN TỬ OLIST
 
 > **Môn học:** Data Warehouses (Kho Dữ Liệu - CO4031)  
-> **Hệ cơ sở dữ liệu:** PostgreSQL 17 (Cổng 5435, Database: `dss` / `olist_dw`)  
+> **Hệ cơ sở dữ liệu:** PostgreSQL 16 (Docker, cổng 5433 theo `.env`; xem `.env.example`), database `olist_dw`  
+> **Số liệu trong tài liệu:** kiểm lại trên kho sau một lần chạy `etl_pipeline.py` đầy đủ ngày 12/11/2026  
 > **Công nghệ Backend:** Python / Flask RESTful API Gateway  
 > **Công nghệ Frontend:** React 19 / TypeScript / Vite / Tailwind CSS / Recharts / Lucide Icons  
 > **Bộ dữ liệu:** Olist Brazilian E-Commerce (100.000+ đơn hàng, 1.450.000+ bản ghi)
@@ -44,7 +45,7 @@ Dự án đã xây dựng hoàn chỉnh một giải pháp BI/Data Warehouse to�
         │  (Acceptance Tests F1 -> F8: 03_validate.sql & etl_pipeline.py)
         ▼
 [OLAP ENGINE: 3 Đại Chủ Đề Nghiệp Vụ]
-   ├── 01_sales_time.sql         (8 phần: MoM, QoQ, YoY, Roll-up, Drill-down, Slice, Dice, Pivot)
+   ├── 01_sales_time.sql         (8 phần: MoM, QoQ/YoY cùng kỳ, Roll-up, Drill-down, Slice, Dice, Pivot)
    ├── 02_product_seller_geo.sql (10 phần: Top Category/Seller, Pareto 80/20, Freight, Geo, Rank)
    └── 03_customer_payment.sql   (12 phần: Repeat Rate, ARPU, Frequency Rollup, CUBE, VIP, RFM)
         │
@@ -137,10 +138,10 @@ erDiagram
 
 ## 3. HIỆN THỰC QUY TRÌNH ETL & DATA PIPELINE
 
-Quy trình ETL được tự động hóa hoàn toàn bằng Python script ([etl_pipeline.py](file:///d:/.LEARN/Year_4/Data%20Warehouses/BTL/Code/archive/etl_pipeline.py)) kết hợp cùng các thủ tục SQL tối ưu cao trong PostgreSQL.
+Quy trình ETL được tự động hóa hoàn toàn bằng Python script ([etl_pipeline.py](../etl_pipeline.py)) kết hợp cùng các thủ tục SQL tối ưu cao trong PostgreSQL.
 
 ### 3.1. Tầng Staging: Nạp Raw & Chuẩn Hóa Typed
-1. **Khởi tạo Schema Staging ([sql/staging/01_schema.sql](file:///d:/.LEARN/Year_4/Data%20Warehouses/BTL/Code/archive/sql/staging/01_schema.sql)):**
+1. **Khởi tạo Schema Staging ([sql/staging/01_schema.sql](../sql/staging/01_schema.sql)):**
    - Tạo bộ 7 bảng `staging.raw_*` kiểu `TEXT`, không ràng buộc, giữ nguyên bản dữ liệu đầu vào.
    - Tạo bộ 7 bảng `staging.stg_*` với kiểu dữ liệu định chuẩn, ràng buộc khóa chính và khóa ngoại tham chiếu.
 2. **Nạp Dữ Liệu Tốc Độ Cao Bằng `COPY`:**
@@ -149,14 +150,14 @@ Quy trình ETL được tự động hóa hoàn toàn bằng Python script ([etl
      COPY staging.raw_* FROM STDIN WITH (FORMAT csv, HEADER true, ENCODING 'UTF8')
      ```
    - Nạp trọn vẹn hơn 400.000 bản ghi thô từ các file CSV vào PostgreSQL chỉ mất **dưới 3 giây**.
-3. **Làm Sạch và Thăng Hạng Dữ Liệu ([sql/staging/03_promote.sql](file:///d:/.LEARN/Year_4/Data%20Warehouses/BTL/Code/archive/sql/staging/03_promote.sql)):**
+3. **Làm Sạch và Thăng Hạng Dữ Liệu ([sql/staging/03_promote.sql](../sql/staging/03_promote.sql)):**
    - Loại bỏ khoảng trắng thừa bằng `btrim()`.
    - Chuyển chuỗi rỗng thành `NULL` thông qua `NULLIF(btrim(col), '')`.
    - Ép kiểu an toàn sang `TIMESTAMP`, `NUMERIC(10,2)`, `INTEGER`, `VARCHAR(32)`, `CHAR(2)`.
    - Chạy hàm kiểm thử PL/pgSQL tự động xác nhận số dòng thô khớp 100% với số dòng sau khi chuẩn hóa (`raw_count == stg_count`), nếu lệch lập tức báo ngoại lệ `RAISE EXCEPTION`.
 
 ### 3.2. Tầng Data Warehouse: Nạp Dimension & Fact
-Thực thi tuần tự thông qua [sql/dw/02_load.sql](file:///d:/.LEARN/Year_4/Data%20Warehouses/BTL/Code/archive/sql/dw/02_load.sql):
+Thực thi tuần tự thông qua [sql/dw/02_load.sql](../sql/dw/02_load.sql):
 1. **Nạp `dim_date`:** Sử dụng hàm `generate_series()` sinh lịch từ ngày nhỏ nhất đến ngày lớn nhất trong tập đơn hàng (`2016-09-04` đến `2018-10-17`). Trích xuất chính xác `year`, `quarter`, `month`, `day_of_month`, `day_of_week` (ISO: 1 = Thứ hai ... 7 = Chủ nhật) và cờ `is_weekend` (thứ 7, CN).
 2. **Nạp `dim_customer`:** `SELECT DISTINCT customer_unique_id` sinh ra đúng 96.096 khách hàng duy nhất.
 3. **Nạp `dim_product`:** Kết hợp `stg_products` với `stg_category_translation` bằng `LEFT JOIN` để bảo tồn danh mục tiếng Bồ Đào Nha gốc kể cả khi bảng dịch bị khuyết từ khóa.
@@ -165,40 +166,25 @@ Thực thi tuần tự thông qua [sql/dw/02_load.sql](file:///d:/.LEARN/Year_4/
 6. **Nạp `fact_sales`:** Đầy đủ 112.650 món hàng, ánh xạ chính xác các khóa Dimension thông qua `order_id` và mã tự nhiên.
 
 ### 3.3. Bộ Kiểm Tra Nghiệm Thu Tự Động (Acceptance Tests F1 -> F8)
-Dự án đã tích hợp bộ kiểm thử nghiệm thu toàn diện tại [sql/dw/03_validate.sql](file:///d:/.LEARN/Year_4/Data%20Warehouses/BTL/Code/archive/sql/dw/03_validate.sql) và hàm `run_acceptance_tests()` trong [etl_pipeline.py](file:///d:/.LEARN/Year_4/Data%20Warehouses/BTL/Code/archive/etl_pipeline.py). Cả **8 tiêu chí kiểm tra F1 -> F8 đều đạt PASS tuyệt đối (100%)**:
+Dự án đã tích hợp bộ kiểm thử nghiệm thu toàn diện tại [sql/dw/03_validate.sql](../sql/dw/03_validate.sql) và hàm `run_acceptance_tests()` trong [etl_pipeline.py](../etl_pipeline.py). Các tiêu chí F1 -> F7 là kiểm tra bất biến (sai là dừng nạp), F8 là báo cáo KPI để đối chiếu. Kết quả lần chạy gần nhất:
 
 ```
 ===========================================================================
-📋 KIỂM TRA NGHIỆM THU DATA WAREHOUSE THEO MỤC 8 TÀI LIỆU FIX.MD
+KIỂM TRA NGHIỆM THU DATA WAREHOUSE (sql/dw/03_validate.sql)
 ===========================================================================
-[PASS] F1. Đối soát doanh số và phí vận chuyển:
-       * Fact price = Staging price     : 13.221.498,11 R$ (Khớp 100%)
-       * Fact freight = Staging freight :  2.198.275,64 R$ (Khớp 100%)
-[PASS] F2. Tính nhất quán giữa 2 Fact Table:
-       * Trùng lặp cặp (order_id, order_item_id) trong Fact_Sales: 0 dòng
-       * Đơn hàng lệch purchase_date_key hoặc customer_key       : 0 dòng
-       * Đơn trong Fact_Sales thiếu ở Fact_Customer_Order        : 0 dòng
-[PASS] F3. Ánh xạ Dimension (Product, Seller, Date, Customer):
-       * Thiếu Product: 0 | Thiếu Seller: 0 | Thiếu Date: 0 | Thiếu Customer: 0
-[PASS] F4. Đối soát thanh toán đầy đủ:
-       * Lệch tổng tiền thanh toán từng đơn giữa DW và Staging: 0 đơn
-       * Đơn không có payment (NULL chuẩn logic): 1 đơn delivered (bfbd0f9bdef84302105ad712db648a6c)
-       * Đơn thanh toán thiếu ở Fact: 0 đơn
-[PASS] F5. Kiểm tra trạng thái đơn hàng:
-       * Giữ trọn vẹn đầy đủ 8 trạng thái đơn hàng (lệch = 0)
-[PASS] F6. Tính nhất quán Dim_Date:
-       * Kiểm tra toàn bộ ràng buộc date_key, year, month, quarter, day_of_week, weekend: Lỗi = 0
-[PASS] F7. Kiểm tra miền giá trị và NULL:
-       * Giá trị âm (price / freight / payment): 0 dòng
-       * Khóa bắt buộc bị NULL: 0 dòng
-[PASS] F8. Kiểm tra KPI nghiệp vụ (Chạy thử):
-       * Đơn hàng giao thành công (delivered): 96.478 đơn
-       * Tổng doanh thu thanh toán delivered : 15.422.461,77 R$
-       * Khách hàng mua hàng thành công      : 93.358 khách duy nhất
+  F4. Số đơn không có dòng thanh toán ở nguồn (để NULL, không gán 0): 1
+  F1 -> F7: mọi ràng buộc đều đạt.
+  F1. price   fact = 13,591,643.70 | staging = 13,591,643.70 R$
+      freight fact = 2,251,909.54 | staging = 2,251,909.54 R$
+  F2. dòng fact_sales = 112,650 / stg_order_items = 112,650; đơn fact_customer_order = 99,441 / stg_orders = 99,441
+  F5. trạng thái đơn: delivered=96,478, shipped=1,107, canceled=625, unavailable=609, invoiced=314, processing=301, created=5, approved=2
+  F8. delivered: 96,478 đơn | thanh toán 15,422,461.77 R$ | 93,358 khách duy nhất
 ===========================================================================
-🏆 KẾT QUẢ NGHIỆM THU: TẤT CẢ 8 TRƯỜNG HỢP KIỂM TRA ĐỀU ĐẠT CHUẨN XUẤT SẮC!
+KẾT QUẢ: F1 -> F7 đạt (03_validate.sql không ném lỗi).
 ===========================================================================
 ```
+
+Ghi chú: F1 đối soát **toàn bộ** dòng hàng (mọi trạng thái), nên tổng price là 13.591.643,70 R$. Con số 13.221.498,11 R$ dùng ở OLAP là doanh thu hàng của riêng đơn `delivered`. Kiểm tra F4 không gõ cứng "đúng 1 đơn thiếu thanh toán". Thay vào đó nó kiểm tra bất biến: đơn có `total_payment_value` NULL thì nguồn thật sự không có dòng thanh toán. Số đơn như vậy chỉ được báo ra.
 
 ---
 
@@ -224,7 +210,7 @@ Hệ thống OLAP được cấu trúc thành **3 file SQL lớn** đại diện
 ---
 
 ### 4.1. Chủ Đề 1: Doanh Thu Theo Thời Gian (Sales & Time)
-* **File mã nguồn:** [sql/olap/01_sales_time.sql](file:///d:/.LEARN/Year_4/Data%20Warehouses/BTL/Code/archive/sql/olap/01_sales_time.sql) (691 dòng SQL tối ưu)
+* **File mã nguồn:** [sql/olap/01_sales_time.sql](../sql/olap/01_sales_time.sql) (633 dòng SQL)
 * **Phạm vi dữ liệu:** Chỉ xét đơn hàng đã giao thành công (`order_status = 'delivered'`).
 * **Các kết quả phân tích tiêu biểu:**
   1. **Phần 0: View nền `dw.v_sales_delivered`:** Tạo view tiện ích tiền kết hợp `fact_sales`, `dim_date`, và `fact_customer_order` để tái sử dụng xuyên suốt.
@@ -233,15 +219,16 @@ Hệ thống OLAP được cấu trúc thành **3 file SQL lớn** đại diện
      - Dùng `NULL` (không ép `0`) cho các tháng không phát sinh dữ liệu (như tháng 11/2016) để giữ trung thực dữ liệu lịch sử.
      - Sử dụng hàm cửa sổ `LAG(product_sales) OVER (ORDER BY year, month)` tính tốc độ tăng trưởng theo tháng (MoM Growth %) và `SUM(product_sales) OVER (PARTITION BY year ORDER BY month)` tính doanh thu lũy kế từ đầu năm (YTD).
   3. **Phần 2 & 3: Tổng hợp theo Quý & Năm (QoQ, YoY):**
-     - Doanh thu năm 2017 đạt **6.103.955,67 R$** (trọn vẹn 12 tháng).
-     - Doanh thu năm 2018 (đến tháng 10) đạt **6.899.967,73 R$**, tăng trưởng **+13.04%** so với cả năm 2017 dù chỉ hoạt động chính thức trong 8 tháng đầu năm.
+     - Doanh thu hàng năm 2017 đạt **5.962.902,01 R$** (đủ 12 tháng). Năm 2018 đạt **7.218.125,12 R$** nhưng chỉ có dữ liệu delivered tháng 1–8.
+     - Tăng trưởng được tính **so cùng kỳ** (chỉ các tháng có ở cả hai năm): 2018 so với 2017 trên tháng 1–8 là **+141,13%** (2.993.456 → 7.218.125 R$). Nếu lấy tổng 8 tháng chia tổng 12 tháng sẽ ra +21,05%, con số này sai bản chất vì trộn chênh lệch số tháng vào tăng trưởng. Tương tự, quý 3/2018 chỉ có 2 tháng: so cùng kỳ là −12,53%, không phải khoảng −39%. Chi tiết: `docs/ra_soat_xu_ly_du_lieu.md` mục 2.1.
+     - Năm 2016 chỉ có 3 tháng lẻ tẻ (giai đoạn khởi động, thiếu hẳn tháng 11), nên tăng trưởng 2017 so với 2016 (+4.796% trên 3 tháng cùng kỳ) đúng về số học nhưng không mang ý nghĩa kinh doanh.
   4. **Phần 4: Thao tác Cuộn (Roll-up):**
      - Sử dụng `GROUP BY ROLLUP (d.year, d.quarter, d.month)` tính toán đồng thời tổng từng tháng, tổng quý, tổng năm và tổng toàn kho (Grand Total = 13.221.498,11 R$).
   5. **Phần 5: Thao tác Khoan (Drill-down):**
      - Khoan sâu từ Năm $\to$ Quý $\to$ Tháng $\to$ Từng ngày bán hàng.
-     - Phân tích hành vi mua sắm ngày cuối tuần (`is_weekend = TRUE` vs `FALSE`): Doanh số ngày trong tuần (Thứ 2 - Thứ 6) chiếm hơn **77%** tổng doanh số sàn.
+     - Phân tích hành vi mua sắm ngày cuối tuần (`is_weekend = TRUE` vs `FALSE`): Doanh số ngày trong tuần (Thứ 2 - Thứ 6) chiếm **77,24%** tổng doanh thu hàng delivered.
   6. **Phần 6: Thao tác Cắt Lát (Slice):**
-     - Cắt lát chuyên sâu vào năm đỉnh cao **2017**, theo dõi chi tiết biến động doanh số 12 tháng với điểm đột biến tại tháng 11 (Black Friday: 1.010.271,31 R$).
+     - Cắt lát chuyên sâu vào năm đỉnh cao **2017**, theo dõi chi tiết biến động doanh số 12 tháng với điểm đột biến tại tháng 11 (Black Friday: 987.765,37 R$ doanh thu hàng delivered).
   7. **Phần 7: Thao tác Tạo Khối (Dice):**
      - Giao đồng thời 3 chiều: `Khoảng năm (2017–2018)` $\times$ `Quý (Q2, Q3)` $\times$ `Ngày cuối tuần (is_weekend = TRUE)`.
   8. **Phần 8: Thao tác Xoay Ma Trận (Pivot):**
@@ -250,7 +237,7 @@ Hệ thống OLAP được cấu trúc thành **3 file SQL lớn** đại diện
 ---
 
 ### 4.2. Chủ Đề 2: Hàng Hóa, Người Bán & Địa Lý (Product, Seller & Geography)
-* **File mã nguồn:** [sql/olap/02_product_seller_geo.sql](file:///d:/.LEARN/Year_4/Data%20Warehouses/BTL/Code/archive/sql/olap/02_product_seller_geo.sql)
+* **File mã nguồn:** [sql/olap/02_product_seller_geo.sql](../sql/olap/02_product_seller_geo.sql)
 * **View nền:** `valid_sales` (chỉ tính đơn `delivered`, lấy địa chỉ `customer_state`, `customer_city` từ đơn hàng).
 * **Các kết quả phân tích tiêu biểu:**
   1. **Top 10 Danh Mục Hàng Hóa:**
@@ -259,7 +246,7 @@ Hệ thống OLAP được cấu trúc thành **3 file SQL lớn** đại diện
      - Seller doanh thu cao nhất đạt **229.472,63 R$** với 1.984 món hàng đã bán.
   3. **Phân Tích Pareto (Nguyên lý 80/20):**
      - Áp dụng `ROW_NUMBER()` và tổng tích lũy `SUM(revenue) OVER (ORDER BY ... ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW)`.
-     - **Kết quả nghiệm chứng:** **Top 20% mã sản phẩm (6.591 / 32.951 sản phẩm) tạo ra tới 74.07% tổng doanh thu hàng hóa** toàn sàn Olist.
+     - **Kết quả nghiệm chứng:** **Top 20% mã sản phẩm (6.444 / 32.216 sản phẩm có ít nhất một món delivered) tạo ra 74,82% tổng doanh thu hàng hóa** toàn sàn Olist.
   4. **Tỷ Lệ Cước Trên Giá Bán (Freight-to-Price Ratio):**
      - Tổng cước vận chuyển (2.198.275,64 R$) chiếm **16.63%** so với tổng giá trị tiền hàng (13.221.498,11 R$).
   5. **Thao tác Cuộn Địa Lý (Roll-up):**
@@ -277,8 +264,8 @@ Hệ thống OLAP được cấu trúc thành **3 file SQL lớn** đại diện
 ---
 
 ### 4.3. Chủ Đề 3: Khách Hàng, Thanh Toán & Hồ Sơ Hành Vi (Customer & Payment Profiling)
-* **File mã nguồn:** [sql/olap/03_customer_payment.sql](file:///d:/.LEARN/Year_4/Data%20Warehouses/BTL/Code/archive/sql/olap/03_customer_payment.sql) (52 KB, 1.250 dòng SQL chi tiết)
-* **Tài liệu phương pháp luận:** [sql/olap/03_customer_payment.md](file:///d:/.LEARN/Year_4/Data%20Warehouses/BTL/Code/archive/sql/olap/03_customer_payment.md)
+* **File mã nguồn:** [sql/olap/03_customer_payment.sql](../sql/olap/03_customer_payment.sql) (948 dòng SQL)
+* **Tài liệu phương pháp luận:** [sql/olap/03_customer_payment.md](../sql/olap/03_customer_payment.md)
 * **Thước đo tiền tệ:** Giá trị thanh toán thực tế của đơn hàng (`total_payment_value`), AOV (`avg(total_payment_value)`), và ARPU.
 * **Các kết quả phân tích tiêu biểu:**
   1. **Tổng Quan Nền Tảng (Delivered Baseline):**
@@ -320,7 +307,7 @@ Hệ thống OLAP được cấu trúc thành **3 file SQL lớn** đại diện
 Dự án không dừng lại ở các câu lệnh SQL tĩnh mà đã đóng gói trọn vẹn thành một sản phẩm phần mềm hoàn chỉnh.
 
 ### 5.1. Backend API Gateway (Flask Architecture)
-Được tổ chức tại thư mục [backend/app/](file:///d:/.LEARN/Year_4/Data%20Warehouses/BTL/Code/archive/backend/app/):
+Được tổ chức tại thư mục [backend/app/](../backend/app/):
 - **Phân Lớp Kiến Trúc Rõ Ràng:**
   - `app/common/query_gateway.py`: Lớp cổng kết nối truy vấn an toàn, thực thi SQL tham số hóa (Parameterized queries), tự động format dữ liệu và quản lý Connection Pool.
   - `app/common/params.py` & `http.py`: Xác thực và chuẩn hóa tham số đầu vào (`year`, `quarter`, `month`, `states`, `categories`, `limit`), trả mã lỗi chuẩn HTTP 400 nếu vi phạm miền giá trị.
@@ -347,7 +334,7 @@ Dự án không dừng lại ở các câu lệnh SQL tĩnh mà đã đóng gói
   - `app/features/overview/routes.py`: Cung cấp endpoint tổng quan KPI `/api/overview`.
 
 ### 5.2. Frontend Interactive Dashboard (React + TypeScript)
-Được phát triển tại thư mục [frontend/src/](file:///d:/.LEARN/Year_4/Data%20Warehouses/BTL/Code/archive/frontend/src/):
+Được phát triển tại thư mục [frontend/src/](../frontend/src/):
 - **Giao Diện Hiện Đại & Trực Quan:**
   - Xây dựng theo ngôn ngữ thiết kế Component-driven với Tailwind CSS, tối ưu trải nghiệm người dùng với hệ thống Chip thao tác OLAP (Filter Chips).
   - Sử dụng thư viện đồ họa **Recharts** vẽ các biểu đồ: Biểu đồ cột (Bar Chart), Biểu đồ đường xu hướng (Line Chart), Biểu đồ kết hợp (Composed Chart), Biểu đồ tròn/miền (Pie/Area Chart).
@@ -377,8 +364,8 @@ Toàn bộ các chỉ số dưới đây đã được truy vấn và kiểm ch�
 | **Độ lệch giữa (Giá + Cước) & Thanh toán** | Toàn kho Olist | **2.688,02 R$** | Do phát sinh phí trả góp và voucher chiết khấu |
 | **Giá trị đơn hàng trung bình (AOV)** | `avg(total_payment_value)` | **159,86 R$ / đơn** | Mức chi trả trung bình cho một đơn giao thành công |
 | **Chi tiêu bình quân trên khách (ARPU)** | `Thanh toán / Khách delivered`| **165,20 R$ / khách**| Mức doanh thu trung bình mỗi khách hàng đóng góp |
-| **Tỷ lệ tập trung Pareto (80/20)** | `dw.fact_sales` & `dim_product`| **74.07% doanh thu** | Tạo ra từ **20% mã sản phẩm** bán chạy nhất |
-| **Bang có doanh số cao nhất** | `customer_state = 'SP'` | **5.000.564,30 R$** | Bang São Paulo chiếm **37.82%** doanh thu toàn quốc |
+| **Tỷ lệ tập trung Pareto (80/20)** | `dw.fact_sales` & `dim_product`| **74,82% doanh thu** | Tạo ra từ **20% mã sản phẩm** bán chạy nhất |
+| **Bang có doanh số cao nhất** | `customer_state = 'SP'` | **5.067.633,16 R$** | Bang São Paulo chiếm **38,33%** doanh thu hàng toàn quốc |
 | **Danh mục hàng bán chạy nhất** | `health_beauty` | **1.258.681,34 R$** | Đứng đầu toàn sàn cả về doanh thu và lượt bán |
 | **Số lượng khách hàng VIP** | `Chi tiêu > 1.000 R$` | **1.149 người** | Đóng góp hơn 1.86 triệu R$ vào dòng tiền của sàn |
 

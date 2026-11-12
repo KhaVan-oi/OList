@@ -53,16 +53,30 @@ const MEASURE_COLS: Col[] = [
 ]
 
 function growthCols(prefix: 'yoy' | 'qoq' | 'mom'): Col[] {
+  // Năm và quý: backend so CÙNG KỲ (chỉ các tháng có ở cả hai kỳ), xem growth.py
+  const suffix = prefix === 'mom' ? '' : ' cùng kỳ'
   return [
-    { key: `${prefix}_product_sales_pct`, label: 'Tăng trưởng DT (%)' },
-    { key: `${prefix}_freight_value_pct`, label: 'Tăng trưởng Phí (%)' },
-    { key: `${prefix}_order_item_count_pct`, label: 'Tăng trưởng SL (%)' },
+    { key: `${prefix}_product_sales_pct`, label: `Tăng trưởng DT${suffix} (%)` },
+    { key: `${prefix}_freight_value_pct`, label: `Tăng trưởng Phí${suffix} (%)` },
+    { key: `${prefix}_order_item_count_pct`, label: `Tăng trưởng SL${suffix} (%)` },
   ]
 }
 
+/** Số tháng có dữ liệu của kỳ và số tháng dùng để so cùng kỳ */
+const COVERAGE_COLS: Col[] = [
+  { key: 'months_with_data', label: 'Số tháng có dữ liệu' },
+  { key: 'months_compared', label: 'Số tháng so cùng kỳ' },
+]
+
 const TIME_COLS: Record<TimeLevel, Col[]> = {
-  year: [{ key: 'year', label: 'Năm' }, ...MEASURE_COLS, ...growthCols('yoy')],
-  quarter: [{ key: 'year', label: 'Năm' }, { key: 'quarter', label: 'Quý' }, ...MEASURE_COLS, ...growthCols('qoq')],
+  year: [{ key: 'year', label: 'Năm' }, ...MEASURE_COLS, ...growthCols('yoy'), ...COVERAGE_COLS],
+  quarter: [
+    { key: 'year', label: 'Năm' },
+    { key: 'quarter', label: 'Quý' },
+    ...MEASURE_COLS,
+    ...growthCols('qoq'),
+    ...COVERAGE_COLS,
+  ],
   month: [{ key: 'year', label: 'Năm' }, { key: 'month', label: 'Tháng' }, ...MEASURE_COLS, ...growthCols('mom')],
   day: [
     { key: 'full_date', label: 'Ngày' },
@@ -599,6 +613,11 @@ export function SalesTimePage() {
           ) : (
             <QueryState loading={query.isLoading} error={query.error}>
               <DataTable rows={rows} cols={tableCols} activeKpi={activeKpi} />
+              {!isDice && (level === 'year' || level === 'quarter') ? (
+                <p className="mt-3 text-xs text-muted-foreground">
+                  Tăng trưởng {level === 'year' ? 'năm' : 'quý'} chỉ so <strong>cùng kỳ</strong>. Cột doanh thu vẫn là tổng đầy đủ của kỳ.
+                </p>
+              ) : null}
             </QueryState>
           )}
         </CardContent>

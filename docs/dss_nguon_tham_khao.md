@@ -20,7 +20,7 @@ Vị trí mã: `backend/app/features/dss/forecast.py` (viết tắt `forecast.py
 
 ### 1.1. Tồn an toàn là phân vị của sai số dự báo ✅
 
-- **Mã:** `order_plan`, `_buffer`, `_quantile` (`forecast.py:101-122`).
+- **Mã:** `order_plan`, `_buffer`, `_quantile` (`forecast.py`).
 - **Công thức trong mã** (với lead time L = 1 tháng):
 
   ```text
@@ -51,7 +51,7 @@ Vị trí mã: `backend/app/features/dss/forecast.py` (viết tắt `forecast.py
 
 ### 1.2. Phân vị nội suy tuyến tính ✅ (bài) và 📚 (numpy)
 
-- **Mã:** `np.quantile(..., method="linear")` (`forecast.py:101-102`).
+- **Mã:** `np.quantile(..., method="linear")` (`forecast.py`).
 - **Nguồn:** Omega 84, mục **4.2.2 "Empirical percentile"**: "the requested value is typically linearly interpolated from
   the available values". Bài tính bằng hàm `prctile` của MATLAB.
 - **Phía numpy:** `method="linear"` tương ứng định nghĩa type 7 trong Hyndman & Fan (1996), *Sample quantiles in
@@ -59,7 +59,7 @@ Vị trí mã: `backend/app/features/dss/forecast.py` (viết tắt `forecast.py
 
 ### 1.3. Các mức 85%, 90%, 95%, 99% ✅
 
-- **Mã:** `SERVICE_LEVELS` (`forecast.py:127`); mặc định 90% (`routes.py`, hàm `forecast`).
+- **Mã:** `SERVICE_LEVELS` (`forecast.py`); mặc định 90% (`routes.py`, hàm `forecast`).
 - **Nguồn:** Omega 84, mục 5.2: "the target CSL values are set to 85%, 90%, 95% and 99% for both simulations and real
   data". Bài IJF cùng nhóm tác giả cũng dùng đúng bốn mức này ở mục 4.3:
   Trapero, Cardós, Kourentzes, *Quantile forecast optimal combination to enhance safety stock estimation*,
@@ -71,7 +71,7 @@ Vị trí mã: `backend/app/features/dss/forecast.py` (viết tắt `forecast.py
 
 ### 1.4. Đường đánh đổi thiếu hàng và dư hàng 🛠️ (có cơ sở khái niệm trong bài ✅)
 
-- **Mã:** `tradeoff` (`forecast.py:130-161`).
+- **Mã:** `tradeoff` (`forecast.py`).
 - **Cách làm (leave-one-out):** với mỗi tháng t trong backtest, đệm chỉ học từ các tháng **khác** t. Lượng nhập của tháng
   đó là dự báo tháng đó cộng đệm. Sau đó đếm tỷ lệ tháng thiếu hàng (`thực tế > lượng nhập`), mức dư (`max(nhập − thực tế, 0) / thực tế`),
   mức thiếu (`max(thực tế − nhập, 0) / thực tế`).
@@ -91,7 +91,7 @@ Vị trí mã: `backend/app/features/dss/forecast.py` (viết tắt `forecast.py
 
 ---
 
-## 2. Các mô hình dự báo (`forecast_all`, `forecast.py:59-65`)
+## 2. Các mô hình dự báo (`forecast_all`, `forecast.py`)
 
 ### 2.1. Naive (tháng trước) 📚
 
@@ -110,7 +110,7 @@ Vị trí mã: `backend/app/features/dss/forecast.py` (viết tắt `forecast.py
 
 ### 2.3. Holt suy giảm xu hướng (damped trend) ✅
 
-- **Mã:** `_holt_run`, `holt_forecast` (`forecast.py:30-56`):
+- **Mã:** `_holt_run`, `holt_forecast` (`forecast.py`):
 
   ```text
   dự báo 1 bước: ŷ(t+1) = ℓ_t + φ · b_t
@@ -133,7 +133,7 @@ Vị trí mã: `backend/app/features/dss/forecast.py` (viết tắt `forecast.py
 
 ### 2.4. Blend = trung bình của naive và Holt 🛠️ (nguồn chỉ hỗ trợ một phần)
 
-- **Mã:** `blend = (naive + holt) / 2` (`forecast.py:65`).
+- **Mã:** `blend = (naive + holt) / 2` (`forecast.py`).
 - **Nguồn hỗ trợ:** Smith & Wallis, *A Simple Explanation of the Forecast Combination Puzzle*, Oxford Bulletin of
   Economics and Statistics 71(3) (2009), 331–355. [DOI](https://doi.org/10.1111/j.1468-0084.2008.00541.x) ✅ thông tin
   thư mục. Bài chỉ nói: với mẫu hữu hạn, trọng số ước lượng từ dữ liệu bị nhiễu, nên chia đều thường tốt hơn trọng số ước lượng.
@@ -151,27 +151,26 @@ Vị trí mã: `backend/app/features/dss/forecast.py` (viết tắt `forecast.py
 
 ### 3.1. Backtest trượt theo thời gian (rolling origin) 📚
 
-- **Mã:** `backtest` (`forecast.py:68-73`): ở mỗi tháng t từ `MIN_TRAIN`, dự báo `values[t]` chỉ từ `values[:t]`.
+- **Mã:** `backtest` (`forecast.py`): ở mỗi tháng t từ `MIN_TRAIN`, dự báo `values[t]` chỉ từ `values[:t]`.
 - **Nguồn:** Hyndman & Athanasopoulos, FPP3, mục "Time series cross-validation". [Link](https://otexts.com/fpp3/tscv.html)
   Cùng ý tưởng được Tashman (2000), *Out-of-sample tests of forecasting accuracy*, International Journal of Forecasting 16(4), 437–450, gọi là rolling origin. 📚
 - **Lý do dùng:** chuỗi thời gian không được xáo trộn hay kiểm tra trên dữ liệu đã dùng để học. Mỗi dự báo chỉ dùng thông tin
   có tại thời điểm đó, giống tình huống thật.
 
-### 3.2. WAPE 🛠️ (định nghĩa chuẩn, không có nguồn trong repo)
+### 3.2. WAPE (tỷ số MAD/Mean) 📚
 
-- **Mã:** `model_metrics` (`forecast.py:80-90`): `WAPE = Σ|thực tế − dự báo| / Σ thực tế`.
+- **Mã:** `model_metrics` (`forecast.py`): `WAPE = Σ|thực tế − dự báo| / Σ thực tế`.
   Kèm `MAPE = mean(|thực tế − dự báo| / max(thực tế, 1))` và `bias = (Σ dự báo − Σ thực tế) / Σ thực tế`.
-- **Nguồn:** không có paper được kiểm tra cho định nghĩa này. Đây là thước đo sai số phần trăm có trọng số theo
-  khối lượng, còn gọi là tỷ lệ MAD/mean (📚, cần tự tìm nguồn nếu muốn trích).
-- **Lý do chọn (🛠️):**
-  1. Không bị phình khi một chuỗi nhỏ có tháng gần 0 (MAPE sẽ bị; mã phải chặn mẫu số ở 1 cho MAPE).
-  2. Cộng gộp được qua nhiều bang và danh mục trong một con số duy nhất.
+- **Nguồn:** S. Kolassa, W. Schütz, *Advantages of the MAD/Mean ratio over the MAPE*, **Foresight: The International
+  Journal of Applied Forecasting** 6 (2007), 40–43. Tỷ số MAD/Mean = trung bình |sai số| / trung bình thực tế. Khi
+  cùng số kỳ ở tử và mẫu, nó bằng đúng `Σ|e| / Σ thực tế`, tức WAPE trong mã. 📚 Chưa mở lại toàn văn khi viết mục
+  này; cần đối chiếu trước khi đưa vào báo cáo.
+- **Lý do chọn:**
+  1. Không bị phình khi một chuỗi nhỏ có tháng gần 0. MAPE thì bị, nên mã phải chặn mẫu số của MAPE ở 1. Đây chính là
+     lập luận của Kolassa và Schütz.
+  2. Gộp được qua nhiều bang và danh mục thành một con số duy nhất (tháng lớn có trọng số lớn).
   3. Người ra quyết định đọc được ngay: "lệch trung bình khoảng 11%".
-- **Giới hạn cần biết:** Hyndman & Koehler (2006), *Another look at measures of forecast accuracy*, International Journal of
-  Forecasting 22(4), 679–688 ([DOI](https://doi.org/10.1016/j.ijforecast.2006.03.001), ✅ thông tin thư mục) khuyến nghị
-  sai số tỷ lệ theo thang (MASE) để so sánh qua nhiều chuỗi. Bài **không** định nghĩa WAPE, nên không dùng bài này làm
-  nguồn cho công thức WAPE. Nếu bị hỏi "sao không dùng MASE", câu trả lời là: WAPE dễ giải thích hơn cho người nhập hàng
-  và đủ để so sánh các mô hình trên cùng một chuỗi.
+- **Giới hạn:** WAPE vẫn phụ thuộc quy mô chuỗi khi gộp. Vì vậy từ bản này có thêm MASE (mục 3.4).
 
 ### 3.3. Không có chế độ tự chọn mô hình theo sai số thấp nhất 🛠️
 
@@ -181,20 +180,39 @@ Vị trí mã: `backend/app/features/dss/forecast.py` (viết tắt `forecast.py
   blend (11,2%) 0,1 điểm, nằm trong nhiễu của 14 tháng kiểm tra; (4) người dùng dễ hiểu nhầm đó là lựa chọn "tốt nhất".
   Người dùng vẫn tự chọn tay 4 mô hình và so sánh trong bảng chi tiết kỹ thuật.
 
+### 3.4. MASE ✅ (thông tin thư mục) / 📚 (định nghĩa)
+
+- **Mã:** `naive_scale`, `mase`, `backtest` (`forecast.py`); cột `mase` trong `/api/dss/forecast` (bảng so sánh mô
+  hình) và `/api/dss/accuracy` (bảng theo mức tổng hợp).
+- **Công thức:** sai số tỷ lệ `q_t = e_t / ( (1/(n−1)) · Σ_{i=2..n} |y_i − y_{i−1}| )`, `MASE = mean(|q_t|)`. Mẫu số
+  là MAE trong mẫu của dự báo naive một bước.
+- **Nguồn:** R. J. Hyndman, A. B. Koehler, *Another look at measures of forecast accuracy*, International Journal of
+  Forecasting 22(4) (2006), 679–688. [DOI](https://doi.org/10.1016/j.ijforecast.2006.03.001)
+- **Cách áp vào backtest trượt** (🛠️, bám định nghĩa "trong mẫu"): ở tháng t, mẫu số chỉ tính trên `values[:t]`,
+  đúng phần lịch sử mà mô hình được thấy. Không dùng dữ liệu sau t.
+- **Lý do thêm:** (1) không đơn vị nên gộp được bang và danh mục có quy mô rất khác nhau, điều WAPE làm kém; (2) chính
+  bài này được nhắc ở bản cũ như lý do "vì sao không dùng MASE", nay có cả hai số để so; (3) không cần thêm thư viện.
+- **Cách đọc, cần nói rõ khi trình bày:** ở mức 10 bang và 15 danh mục, **chính naive cũng có MASE > 1** (số món: 1,12
+  và 1,27). Lý do là giai đoạn kiểm tra 2017-07 đến 2018-08 biến động mạnh hơn phần lịch sử dùng làm mẫu số. Vì vậy
+  không đọc "MASE < 1 là hơn naive" ở đây, mà **so MASE giữa các mô hình trong cùng một hàng**. Kết quả (số món, blend
+  so với naive): toàn kho 0,89 so với 0,97; 10 bang 1,01 so với 1,12; 15 danh mục 1,23 so với 1,27. Thứ tự này khớp
+  với WAPE.
+- **Vì sao chưa thêm kiểm định Diebold–Mariano:** chỉ có 12–14 tháng kiểm tra, kiểm định gần như luôn ra "chưa đủ bằng
+  chứng", và phải thêm thư viện `scipy`. Nhóm chọn báo cáo hai thước đo thay vì khẳng định ý nghĩa thống kê.
+
 ---
 
 ## 4. Tham số do nhóm tự đặt
 
 | Tham số | Giá trị | Vị trí | Lý do chọn | Kiểm tra độ nhạy |
 |---|---|---|---|---|
-| `MIN_TRAIN` | 6 | `forecast.py:22` | Cần đủ lịch sử để Holt khớp được, nhưng vẫn để lại khoảng 12 đến 14 tháng kiểm tra | Có. `docs/dss_exploration/07_min_train_sensitivity.py`: WAPE toàn kho 11,2% ở 6 và 7, 12,6% ở 3, 12,8% ở 10. Lượng nhập dao động khoảng ±5% |
-| `MIN_ERRORS` | 3 | `forecast.py:93` | Dưới 3 sai số thì phân vị không có nghĩa, nên đệm = 0 | Không |
-| `EVENT_MONTHS` | 2017-11, 2017-12 | `forecast.py:23` | Black Friday 2017 và tháng sau, là sự kiện chưa có tiền lệ trong dữ liệu, mọi mô hình hụt khoảng 31 đến 39% ở tháng này. Hệ thống báo cáo cả hai trường hợp, có và không có | Có (hai cột WAPE song song) |
-| Cửa sổ lịch sử bắt đầu | 2017-01 | `routes.py:19` | 2016 quá thưa (có tháng không có đơn) | Không |
-| Cửa sổ lịch sử kết thúc | tháng đầy đủ gần nhất | `routes.py:30-49` | Lấy từ dữ liệu thay vì gõ cứng | Không |
-| `COMPLETE_MONTH_RATIO` | 0,3 | `routes.py:22` | Một tháng cuối chỉ được coi là đầy đủ nếu số món ≥ 30% trung vị, để tháng nạp dở không kéo dự báo xuống | Không |
-| Số bang, danh mục lớn | 10 và 15 | `routes.py:26-27` | Đủ phủ phần lớn doanh thu mà vẫn đọc được trên một bảng | Không |
-| Ngưỡng nhận xét "hơn baseline" | trên 2 điểm: tốt hơn; 0,5 đến 2: chỉ hơn; ±0,5: ngang; dưới −0,5: kém | `frontend/src/features/dss/format.ts:27-29` | Ngưỡng đặt tay để câu kết luận không khẳng định chênh lệch rất nhỏ là "tốt hơn". Không có cơ sở thống kê (chưa kiểm định ý nghĩa) | Không |
+| `MIN_TRAIN` | 6 | `forecast.py` | Cần đủ lịch sử để Holt khớp được, nhưng vẫn để lại khoảng 12 đến 14 tháng kiểm tra | Có. `docs/dss_exploration/07_min_train_sensitivity.py`: WAPE toàn kho 11,2% ở 6 và 7, 12,6% ở 3, 12,8% ở 10. Lượng nhập dao động khoảng ±5% |
+| `MIN_ERRORS` | 3 | `forecast.py` | Dưới 3 sai số thì phân vị không có nghĩa, nên đệm = 0 | Không |
+| `EVENT_MONTHS` | 2017-11, 2017-12 | `forecast.py` | Black Friday 2017 và tháng sau, là sự kiện chưa có tiền lệ trong dữ liệu, mọi mô hình hụt khoảng 31 đến 39% ở tháng này. Hệ thống báo cáo cả hai trường hợp, có và không có | Có (hai cột WAPE song song) |
+| Cửa sổ lịch sử bắt đầu | 2017-01 | `routes.py` | 2016 quá thưa (có tháng không có đơn) | Không |
+| Cửa sổ lịch sử kết thúc | tháng đầy đủ gần nhất | `routes.py` | Lấy từ dữ liệu thay vì gõ cứng | Không |
+| `COMPLETE_MONTH_RATIO` | 0,3 | `routes.py` | Một tháng cuối chỉ được coi là đầy đủ nếu số món ≥ 30% trung vị, để tháng nạp dở không kéo dự báo xuống | Không |
+| Số bang, danh mục lớn | 10 và 15 | `routes.py` | Đủ phủ phần lớn doanh thu mà vẫn đọc được trên một bảng | Không |
 
 ---
 
@@ -246,4 +264,6 @@ dùng trong đó là chuẩn, nhưng **chưa được mở lại nguồn** khi v
 | Ba phương trình Holt suy giảm | ✅ đã đối chiếu với FPP3 mục 8.2 |
 | Smith và Wallis (2009), Hyndman và Koehler (2006) | ✅ thông tin thư mục; 📚 nội dung chưa đọc toàn văn |
 | FPP3 (naive, cross-validation), Hyndman và Fan (1996), Gardner và McKenzie (1985), Tashman (2000), Kimball, Rousseeuw, Hubert và Arabie, MacQueen | 📚 chưa mở lại trong phiên này |
-| WAPE, leave-one-out, lưới Holt, `MIN_TRAIN`, ngưỡng giao diện, blend 50/50 | 🛠️ lựa chọn của nhóm, có lý do ở trên |
+| WAPE: Kolassa và Schütz (2007) | 📚 nguồn đã ghi, chưa mở lại toàn văn |
+| MASE: Hyndman và Koehler (2006) | ✅ thông tin thư mục; 📚 định nghĩa ghi theo bài, nên mở bài đối chiếu công thức scaled error |
+| Leave-one-out, lưới Holt, `MIN_TRAIN`, blend 50/50, mẫu số MASE theo từng mốc backtest | 🛠️ lựa chọn của nhóm, có lý do ở trên |

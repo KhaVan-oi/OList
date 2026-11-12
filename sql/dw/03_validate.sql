@@ -1,5 +1,8 @@
--- Bộ kiểm tra nghiệm thu Data Warehouse sau khi nạp theo Fix.md
--- Bao gồm toàn bộ các hạng mục A -> E và các tiêu chí mở rộng F1 -> F8
+-- Bộ kiểm tra nghiệm thu Data Warehouse sau khi nạp. ĐÂY LÀ NGUỒN KIỂM TRA DUY NHẤT:
+-- etl_pipeline.run_acceptance_tests() chạy file này rồi chỉ in báo cáo số liệu.
+--   F1..F7: khối DO bên dưới, sai một điều là RAISE EXCEPTION và cả giao dịch bị hủy.
+--   F8    : các câu SELECT cuối file, báo cáo KPI để người đọc tự đối chiếu.
+-- Nguyên tắc: kiểm tra BẤT BIẾN (khóa, đối soát tổng, miền giá trị), không gõ cứng số đếm của bộ dữ liệu.
 
 DO $$
 DECLARE
@@ -40,6 +43,7 @@ DECLARE
     pay_mismatch bigint;
     pay_only_in_stg bigint;
     null_pay_count bigint;
+    pay_null_but_in_stg bigint;
 
     -- Hạng mục F5: Trạng thái đơn hàng
     status_mismatch bigint;
@@ -132,12 +136,21 @@ BEGIN
         RAISE EXCEPTION 'F4. Có % đơn hàng có thanh toán nhưng không tồn tại trong Fact_Customer_Order', pay_only_in_stg;
     END IF;
 
+    -- Bất biến: NULL ở total_payment_value nghĩa là nguồn THỰC SỰ không có dòng thanh toán,
+    -- không phải do nạp thiếu. Không gõ cứng số lượng (bộ Olist hiện có 1 đơn như vậy) vì đó là
+    -- đặc điểm của dữ liệu, không phải quy tắc; số này chỉ được báo bằng NOTICE.
+    SELECT count(*) INTO pay_null_but_in_stg
+    FROM dw.fact_customer_order f
+    WHERE f.total_payment_value IS NULL
+      AND EXISTS (SELECT 1 FROM staging.stg_order_payments p WHERE p.order_id = f.order_id);
+    IF pay_null_but_in_stg <> 0 THEN
+        RAISE EXCEPTION 'F4. Có % đơn bị NULL thanh toán dù staging có dòng thanh toán', pay_null_but_in_stg;
+    END IF;
+
     SELECT count(*) INTO null_pay_count
     FROM dw.fact_customer_order
     WHERE total_payment_value IS NULL;
-    IF null_pay_count <> 1 THEN
-        RAISE EXCEPTION 'F4. Số đơn không có thanh toán là % (kỳ vọng đúng 1 đơn delivered)', null_pay_count;
-    END IF;
+    RAISE NOTICE 'F4. Số đơn không có dòng thanh toán ở nguồn (để NULL, không gán 0): %', null_pay_count;
 
     -- [F5] Kiểm tra trạng thái đơn hàng (đảm bảo không mất / lọc nhầm)
     SELECT count(*) INTO status_mismatch
@@ -184,7 +197,7 @@ BEGIN
         RAISE EXCEPTION 'F7. Có % bản ghi bị NULL ở các trường khóa bắt buộc', null_required_keys;
     END IF;
 
-    RAISE NOTICE '>>> TẤT CẢ CÁC RÀNG BUỘC KIỂM TRA F1 -> F8 ĐỀU ĐẠT CHUẨN XUẤT SẮC! <<<';
+    RAISE NOTICE 'F1 -> F7: mọi ràng buộc đều đạt.';
 END $$;
 
 -- -------------------------------------------------------------
@@ -212,14 +225,14 @@ FROM dw.fact_customer_order f
 GROUP BY f.order_status
 ORDER BY total_orders DESC;
 
--- 3. Tổng số khách hàng duy nhất và phân khúc mẫu RFM
+-- 3. Tổng số khách hàng duy nhất (toàn kho và có đơn delivered)
 SELECT 
     count(DISTINCT c.customer_unique_id) AS total_unique_customers,
     count(DISTINCT CASE WHEN f.order_status = 'delivered' THEN c.customer_unique_id END) AS delivered_customers
 FROM dw.fact_customer_order f
 JOIN dw.dim_customer c ON c.customer_key = f.customer_key;
 
--- 4. Top 5 khách hàng chi tiêu nhiều nhất (Monetary)
+-- 4. Top 5 khách hàng chi tiêu nhiều nhất: recency (ngày, tính từ ngày cuối của dim_date), frequency, monetary
 WITH max_date AS (
     SELECT max(full_date) AS snap_date FROM dw.dim_date
 )

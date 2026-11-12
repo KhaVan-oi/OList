@@ -3,6 +3,7 @@
 from flask import Blueprint, jsonify, request
 
 from app.common.query_gateway import QueryGateway
+from app.features.sales_time import growth
 
 
 def _validate_time_level(level: str) -> bool:
@@ -35,298 +36,38 @@ def create_sales_time_blueprint(gateway: QueryGateway):
     bp = Blueprint("sales_time", __name__)
 
     # ---------------------------------------------------------------------------
-    # Endpoint 1: /api/olap/monthly — KPI tháng + MoM Growth + YTD
-    # Dùng NULL (không dùng COALESCE=0) cho tháng không có giao dịch trong phạm vi
+    # Endpoint 1-3: /api/olap/monthly | quarterly | yearly
+    # SQL dựng ở growth.py. Năm và quý tính tăng trưởng CÙNG KỲ (xem docstring growth.py).
     # ---------------------------------------------------------------------------
     @bp.route('/api/olap/monthly', methods=['GET'])
     def olap_monthly():
-        """
-        Trả về KPI tổng hợp theo tháng kèm MoM Growth và YTD.
-        Tháng thiếu dữ liệu: giữ NULL (không gán 0).
-        Query params tùy chọn:
-          - year: lọc theo năm (2016-2018)
-        """
-        year_filter = request.args.get('year')
-        if year_filter and not _validate_year(year_filter):
+        """KPI theo tháng kèm MoM và YTD. Tháng không có giao dịch giữ NULL. Tham số tùy chọn: year."""
+        year = request.args.get('year')
+        if year and not _validate_year(year):
             return jsonify({'error': 'Tham số year không hợp lệ (2016-2018)'}), 400
-
-        sql = """
-        WITH
-        monthly_raw AS (
-            SELECT
-                d.year, d.month,
-                SUM(fs.price)         AS product_sales,
-                SUM(fs.freight_value) AS freight_value,
-                COUNT(*)              AS order_item_count
-            FROM dw.fact_sales fs
-            JOIN dw.dim_date d         ON fs.purchase_date_key = d.date_key
-            JOIN dw.fact_customer_order fco ON fs.order_id = fco.order_id
-            WHERE fco.order_status = 'delivered'
-            GROUP BY d.year, d.month
-        ),
-        month_series AS (
-            SELECT
-                EXTRACT(YEAR  FROM gs)::int AS year,
-                EXTRACT(MONTH FROM gs)::int AS month
-            FROM generate_series(
-                (SELECT DATE_TRUNC('month', MIN(full_date)) FROM dw.dim_date
-                 WHERE date_key IN (SELECT purchase_date_key FROM dw.fact_sales)),
-                (SELECT DATE_TRUNC('month', MAX(full_date)) FROM dw.dim_date
-                 WHERE date_key IN (SELECT purchase_date_key FROM dw.fact_sales)),
-                INTERVAL '1 month'
-            ) AS gs
-        ),
-        monthly_base AS (
-            SELECT
-                ms.year, ms.month,
-                mr.product_sales,       -- NULL nếu tháng không có giao dịch
-                mr.freight_value,
-                mr.order_item_count
-            FROM month_series ms
-            LEFT JOIN monthly_raw mr ON mr.year = ms.year AND mr.month = ms.month
-        ),
-        monthly_with_metrics AS (
-            SELECT
-                year, month, product_sales, freight_value, order_item_count,
-                -- MoM Growth: NULL nếu tháng hiện tại hoặc tháng trước thiếu dữ liệu, hoặc tháng trước = 0
-                CASE
-                    WHEN product_sales IS NULL OR LAG(product_sales) OVER (ORDER BY year, month) IS NULL
-                         OR LAG(product_sales) OVER (ORDER BY year, month) = 0
-                    THEN NULL
-                    ELSE ROUND(
-                        (product_sales - LAG(product_sales) OVER (ORDER BY year, month))
-                        / LAG(product_sales) OVER (ORDER BY year, month) * 100, 2)
-                END AS mom_product_sales_pct,
-                CASE
-                    WHEN freight_value IS NULL OR LAG(freight_value) OVER (ORDER BY year, month) IS NULL
-                         OR LAG(freight_value) OVER (ORDER BY year, month) = 0
-                    THEN NULL
-                    ELSE ROUND(
-                        (freight_value - LAG(freight_value) OVER (ORDER BY year, month))
-                        / LAG(freight_value) OVER (ORDER BY year, month) * 100, 2)
-                END AS mom_freight_value_pct,
-                CASE
-                    WHEN order_item_count IS NULL OR LAG(order_item_count) OVER (ORDER BY year, month) IS NULL
-                         OR LAG(order_item_count) OVER (ORDER BY year, month) = 0
-                    THEN NULL
-                    ELSE ROUND(
-                        (order_item_count - LAG(order_item_count) OVER (ORDER BY year, month))::numeric
-                        / LAG(order_item_count) OVER (ORDER BY year, month) * 100, 2)
-                END AS mom_order_item_count_pct,
-                -- YTD: lũy kế, NULL nếu không có dữ liệu
-                SUM(product_sales)    OVER (PARTITION BY year ORDER BY month) AS ytd_product_sales,
-                SUM(freight_value)    OVER (PARTITION BY year ORDER BY month) AS ytd_freight_value,
-                SUM(order_item_count) OVER (PARTITION BY year ORDER BY month) AS ytd_order_item_count
-            FROM monthly_base
-        )
-        SELECT
-            year, month,
-            ROUND(product_sales,    2) AS product_sales,
-            ROUND(freight_value,    2) AS freight_value,
-            order_item_count,
-            mom_product_sales_pct,
-            mom_freight_value_pct,
-            mom_order_item_count_pct,
-            ROUND(ytd_product_sales,    2) AS ytd_product_sales,
-            ROUND(ytd_freight_value,    2) AS ytd_freight_value,
-            ytd_order_item_count
-        FROM monthly_with_metrics
-        {where}
-        ORDER BY year, month
-        """
-
-        where_clause = f"WHERE year = {int(year_filter)}" if year_filter else ""
-        sql = sql.format(where=where_clause)
-
         try:
-            data = gateway.fetch_all(sql)
+            data = gateway.fetch_all(*growth.month_sql(int(year) if year else None))
             return jsonify({'status': 'ok', 'level': 'month', 'data': data})
         except Exception as e:
             return jsonify({'error': str(e)}), 500
 
-
-    # ---------------------------------------------------------------------------
-    # Endpoint 2: /api/olap/quarterly — KPI quý + QoQ Growth + YTD
-    # ---------------------------------------------------------------------------
     @bp.route('/api/olap/quarterly', methods=['GET'])
     def olap_quarterly():
-        """
-        Trả về KPI tổng hợp theo quý kèm QoQ Growth và YTD.
-        Quý thiếu dữ liệu: giữ NULL.
-        Query params tùy chọn:
-          - year: lọc theo năm
-        """
-        year_filter = request.args.get('year')
-        if year_filter and not _validate_year(year_filter):
+        """KPI theo quý kèm QoQ cùng kỳ. Tham số tùy chọn: year."""
+        year = request.args.get('year')
+        if year and not _validate_year(year):
             return jsonify({'error': 'Tham số year không hợp lệ (2016-2018)'}), 400
-
-        sql = """
-        WITH
-        quarterly_raw AS (
-            SELECT
-                d.year, d.quarter,
-                SUM(fs.price)         AS product_sales,
-                SUM(fs.freight_value) AS freight_value,
-                COUNT(*)              AS order_item_count
-            FROM dw.fact_sales fs
-            JOIN dw.dim_date d         ON fs.purchase_date_key = d.date_key
-            JOIN dw.fact_customer_order fco ON fs.order_id = fco.order_id
-            WHERE fco.order_status = 'delivered'
-            GROUP BY d.year, d.quarter
-        ),
-        quarter_series AS (
-            SELECT
-                EXTRACT(YEAR    FROM gs)::int AS year,
-                EXTRACT(QUARTER FROM gs)::int AS quarter
-            FROM generate_series(
-                (SELECT DATE_TRUNC('quarter', MIN(full_date)) FROM dw.dim_date
-                 WHERE date_key IN (SELECT purchase_date_key FROM dw.fact_sales)),
-                (SELECT DATE_TRUNC('quarter', MAX(full_date)) FROM dw.dim_date
-                 WHERE date_key IN (SELECT purchase_date_key FROM dw.fact_sales)),
-                INTERVAL '3 months'
-            ) AS gs
-        ),
-        quarterly_base AS (
-            SELECT
-                qs.year, qs.quarter,
-                qr.product_sales,
-                qr.freight_value,
-                qr.order_item_count
-            FROM quarter_series qs
-            LEFT JOIN quarterly_raw qr ON qr.year = qs.year AND qr.quarter = qs.quarter
-        ),
-        quarterly_with_metrics AS (
-            SELECT
-                year, quarter, product_sales, freight_value, order_item_count,
-                CASE
-                    WHEN product_sales IS NULL OR LAG(product_sales) OVER (ORDER BY year, quarter) IS NULL
-                         OR LAG(product_sales) OVER (ORDER BY year, quarter) = 0
-                    THEN NULL
-                    ELSE ROUND(
-                        (product_sales - LAG(product_sales) OVER (ORDER BY year, quarter))
-                        / LAG(product_sales) OVER (ORDER BY year, quarter) * 100, 2)
-                END AS qoq_product_sales_pct,
-                CASE
-                    WHEN freight_value IS NULL OR LAG(freight_value) OVER (ORDER BY year, quarter) IS NULL
-                         OR LAG(freight_value) OVER (ORDER BY year, quarter) = 0
-                    THEN NULL
-                    ELSE ROUND(
-                        (freight_value - LAG(freight_value) OVER (ORDER BY year, quarter))
-                        / LAG(freight_value) OVER (ORDER BY year, quarter) * 100, 2)
-                END AS qoq_freight_value_pct,
-                CASE
-                    WHEN order_item_count IS NULL OR LAG(order_item_count) OVER (ORDER BY year, quarter) IS NULL
-                         OR LAG(order_item_count) OVER (ORDER BY year, quarter) = 0
-                    THEN NULL
-                    ELSE ROUND(
-                        (order_item_count - LAG(order_item_count) OVER (ORDER BY year, quarter))::numeric
-                        / LAG(order_item_count) OVER (ORDER BY year, quarter) * 100, 2)
-                END AS qoq_order_item_count_pct,
-                SUM(product_sales)    OVER (PARTITION BY year ORDER BY quarter) AS ytd_product_sales,
-                SUM(freight_value)    OVER (PARTITION BY year ORDER BY quarter) AS ytd_freight_value,
-                SUM(order_item_count) OVER (PARTITION BY year ORDER BY quarter) AS ytd_order_item_count
-            FROM quarterly_base
-        )
-        SELECT
-            year, quarter,
-            ROUND(product_sales,    2) AS product_sales,
-            ROUND(freight_value,    2) AS freight_value,
-            order_item_count,
-            qoq_product_sales_pct,
-            qoq_freight_value_pct,
-            qoq_order_item_count_pct,
-            ROUND(ytd_product_sales,    2) AS ytd_product_sales,
-            ROUND(ytd_freight_value,    2) AS ytd_freight_value,
-            ytd_order_item_count
-        FROM quarterly_with_metrics
-        {where}
-        ORDER BY year, quarter
-        """
-
-        where_clause = f"WHERE year = {int(year_filter)}" if year_filter else ""
-        sql = sql.format(where=where_clause)
-
         try:
-            data = gateway.fetch_all(sql)
+            data = gateway.fetch_all(*growth.quarter_sql(int(year) if year else None))
             return jsonify({'status': 'ok', 'level': 'quarter', 'data': data})
         except Exception as e:
             return jsonify({'error': str(e)}), 500
 
-
-    # ---------------------------------------------------------------------------
-    # Endpoint 3: /api/olap/yearly — KPI năm + YoY Growth
-    # ---------------------------------------------------------------------------
     @bp.route('/api/olap/yearly', methods=['GET'])
     def olap_yearly():
-        """Trả về KPI tổng hợp theo năm kèm YoY Growth. Năm thiếu giữ NULL."""
-        sql = """
-        WITH
-        yearly_raw AS (
-            SELECT
-                d.year,
-                SUM(fs.price)         AS product_sales,
-                SUM(fs.freight_value) AS freight_value,
-                COUNT(*)              AS order_item_count
-            FROM dw.fact_sales fs
-            JOIN dw.dim_date d         ON fs.purchase_date_key = d.date_key
-            JOIN dw.fact_customer_order fco ON fs.order_id = fco.order_id
-            WHERE fco.order_status = 'delivered'
-            GROUP BY d.year
-        ),
-        year_series AS (
-            SELECT generate_series(
-                (SELECT MIN(year) FROM dw.dim_date
-                 WHERE date_key IN (SELECT purchase_date_key FROM dw.fact_sales)),
-                (SELECT MAX(year) FROM dw.dim_date
-                 WHERE date_key IN (SELECT purchase_date_key FROM dw.fact_sales))
-            )::int AS year
-        ),
-        yearly_base AS (
-            SELECT
-                ys.year,
-                yr.product_sales,
-                yr.freight_value,
-                yr.order_item_count
-            FROM year_series ys
-            LEFT JOIN yearly_raw yr USING (year)
-        )
-        SELECT
-            year,
-            ROUND(product_sales,    2) AS product_sales,
-            ROUND(freight_value,    2) AS freight_value,
-            order_item_count,
-            CASE
-                WHEN product_sales IS NULL OR LAG(product_sales) OVER (ORDER BY year) IS NULL
-                     OR LAG(product_sales) OVER (ORDER BY year) = 0
-                THEN NULL
-                ELSE ROUND(
-                    (product_sales - LAG(product_sales) OVER (ORDER BY year))
-                    / LAG(product_sales) OVER (ORDER BY year) * 100, 2)
-            END AS yoy_product_sales_pct,
-            CASE
-                WHEN freight_value IS NULL OR LAG(freight_value) OVER (ORDER BY year) IS NULL
-                     OR LAG(freight_value) OVER (ORDER BY year) = 0
-                THEN NULL
-                ELSE ROUND(
-                    (freight_value - LAG(freight_value) OVER (ORDER BY year))
-                    / LAG(freight_value) OVER (ORDER BY year) * 100, 2)
-            END AS yoy_freight_value_pct,
-            CASE
-                WHEN order_item_count IS NULL OR LAG(order_item_count) OVER (ORDER BY year) IS NULL
-                     OR LAG(order_item_count) OVER (ORDER BY year) = 0
-                THEN NULL
-                ELSE ROUND(
-                    (order_item_count - LAG(order_item_count) OVER (ORDER BY year))::numeric
-                    / LAG(order_item_count) OVER (ORDER BY year) * 100, 2)
-            END AS yoy_order_item_count_pct,
-            ROUND(product_sales,    2) AS ytd_product_sales,
-            ROUND(freight_value,    2) AS ytd_freight_value,
-            order_item_count            AS ytd_order_item_count
-        FROM yearly_base
-        ORDER BY year
-        """
+        """KPI theo năm kèm YoY cùng kỳ."""
         try:
-            data = gateway.fetch_all(sql)
+            data = gateway.fetch_all(*growth.year_sql())
             return jsonify({'status': 'ok', 'level': 'year', 'data': data})
         except Exception as e:
             return jsonify({'error': str(e)}), 500
@@ -427,260 +168,21 @@ def create_sales_time_blueprint(gateway: QueryGateway):
             GROUP BY d.year, d.month, d.day_of_month, d.full_date, d.is_weekend
             ORDER BY d.full_date
             """
+            params = ()
 
         elif level == 'month':
-            # Grain: tháng — tạo chuỗi liên tục, NULL cho tháng thiếu
-            # Xác định phạm vi tháng dựa theo filter
-            if year:
-                range_condition = f"d.year = {int(year)}"
-                if quarter:
-                    range_condition += f" AND d.quarter = {int(quarter)}"
-                series_sql = f"""
-                SELECT
-                    EXTRACT(YEAR  FROM gs)::int AS year,
-                    EXTRACT(MONTH FROM gs)::int AS month
-                FROM generate_series(
-                    (SELECT DATE_TRUNC('month', MIN(full_date)) FROM dw.dim_date
-                     WHERE date_key IN (SELECT purchase_date_key FROM dw.fact_sales)
-                       AND year = {int(year)} {'AND quarter = ' + quarter if quarter else ''}),
-                    (SELECT DATE_TRUNC('month', MAX(full_date)) FROM dw.dim_date
-                     WHERE date_key IN (SELECT purchase_date_key FROM dw.fact_sales)
-                       AND year = {int(year)} {'AND quarter = ' + quarter if quarter else ''}),
-                    INTERVAL '1 month'
-                ) AS gs
-                """
-            else:
-                series_sql = """
-                SELECT
-                    EXTRACT(YEAR  FROM gs)::int AS year,
-                    EXTRACT(MONTH FROM gs)::int AS month
-                FROM generate_series(
-                    (SELECT DATE_TRUNC('month', MIN(full_date)) FROM dw.dim_date
-                     WHERE date_key IN (SELECT purchase_date_key FROM dw.fact_sales)),
-                    (SELECT DATE_TRUNC('month', MAX(full_date)) FROM dw.dim_date
-                     WHERE date_key IN (SELECT purchase_date_key FROM dw.fact_sales)),
-                    INTERVAL '1 month'
-                ) AS gs
-                """
-
-            # Tổng hợp thực tế (có filter)
-            raw_where_parts = ["fco.order_status = 'delivered'"]
-            if year:    raw_where_parts.append(f"d.year = {int(year)}")
-            if quarter: raw_where_parts.append(f"d.quarter = {int(quarter)}")
-            raw_where = "WHERE " + " AND ".join(raw_where_parts)
-
-            sql = f"""
-            WITH
-            raw_data AS (
-                SELECT d.year, d.month,
-                    SUM(fs.price)         AS product_sales,
-                    SUM(fs.freight_value) AS freight_value,
-                    COUNT(*)              AS order_item_count
-                FROM dw.fact_sales fs
-                JOIN dw.dim_date d         ON fs.purchase_date_key = d.date_key
-                JOIN dw.fact_customer_order fco ON fs.order_id = fco.order_id
-                {raw_where}
-                GROUP BY d.year, d.month
-            ),
-            month_series AS (
-                {series_sql}
-            ),
-            base AS (
-                SELECT
-                    ms.year, ms.month,
-                    rd.product_sales,
-                    rd.freight_value,
-                    rd.order_item_count
-                FROM month_series ms
-                LEFT JOIN raw_data rd ON rd.year = ms.year AND rd.month = ms.month
-            )
-            SELECT
-                year, month,
-                ROUND(product_sales,    2) AS product_sales,
-                ROUND(freight_value,    2) AS freight_value,
-                order_item_count,
-                CASE
-                    WHEN product_sales IS NULL OR LAG(product_sales) OVER (ORDER BY year, month) IS NULL
-                         OR LAG(product_sales) OVER (ORDER BY year, month) = 0
-                    THEN NULL
-                    ELSE ROUND(
-                        (product_sales - LAG(product_sales) OVER (ORDER BY year, month))
-                        / LAG(product_sales) OVER (ORDER BY year, month) * 100, 2)
-                END AS mom_product_sales_pct,
-                CASE
-                    WHEN freight_value IS NULL OR LAG(freight_value) OVER (ORDER BY year, month) IS NULL
-                         OR LAG(freight_value) OVER (ORDER BY year, month) = 0
-                    THEN NULL
-                    ELSE ROUND(
-                        (freight_value - LAG(freight_value) OVER (ORDER BY year, month))
-                        / LAG(freight_value) OVER (ORDER BY year, month) * 100, 2)
-                END AS mom_freight_value_pct,
-                CASE
-                    WHEN order_item_count IS NULL OR LAG(order_item_count) OVER (ORDER BY year, month) IS NULL
-                         OR LAG(order_item_count) OVER (ORDER BY year, month) = 0
-                    THEN NULL
-                    ELSE ROUND(
-                        (order_item_count - LAG(order_item_count) OVER (ORDER BY year, month))::numeric
-                        / LAG(order_item_count) OVER (ORDER BY year, month) * 100, 2)
-                END AS mom_order_item_count_pct
-            FROM base
-            ORDER BY year, month
-            """
+            # Chuỗi tháng liên tục; MoM tính trên toàn chuỗi rồi mới lọc năm/quý
+            sql, params = growth.month_sql(int(year) if year else None, int(quarter) if quarter else None)
 
         elif level == 'quarter':
-            raw_where_parts = ["fco.order_status = 'delivered'"]
-            if year: raw_where_parts.append(f"d.year = {int(year)}")
-            raw_where = "WHERE " + " AND ".join(raw_where_parts)
-
-            if year:
-                series_sql = f"""
-                SELECT
-                    EXTRACT(YEAR    FROM gs)::int AS year,
-                    EXTRACT(QUARTER FROM gs)::int AS quarter
-                FROM generate_series(
-                    (SELECT DATE_TRUNC('quarter', MIN(full_date)) FROM dw.dim_date
-                     WHERE date_key IN (SELECT purchase_date_key FROM dw.fact_sales)
-                       AND year = {int(year)}),
-                    (SELECT DATE_TRUNC('quarter', MAX(full_date)) FROM dw.dim_date
-                     WHERE date_key IN (SELECT purchase_date_key FROM dw.fact_sales)
-                       AND year = {int(year)}),
-                    INTERVAL '3 months'
-                ) AS gs
-                """
-            else:
-                series_sql = """
-                SELECT
-                    EXTRACT(YEAR    FROM gs)::int AS year,
-                    EXTRACT(QUARTER FROM gs)::int AS quarter
-                FROM generate_series(
-                    (SELECT DATE_TRUNC('quarter', MIN(full_date)) FROM dw.dim_date
-                     WHERE date_key IN (SELECT purchase_date_key FROM dw.fact_sales)),
-                    (SELECT DATE_TRUNC('quarter', MAX(full_date)) FROM dw.dim_date
-                     WHERE date_key IN (SELECT purchase_date_key FROM dw.fact_sales)),
-                    INTERVAL '3 months'
-                ) AS gs
-                """
-
-            sql = f"""
-            WITH
-            raw_data AS (
-                SELECT d.year, d.quarter,
-                    SUM(fs.price)         AS product_sales,
-                    SUM(fs.freight_value) AS freight_value,
-                    COUNT(*)              AS order_item_count
-                FROM dw.fact_sales fs
-                JOIN dw.dim_date d         ON fs.purchase_date_key = d.date_key
-                JOIN dw.fact_customer_order fco ON fs.order_id = fco.order_id
-                {raw_where}
-                GROUP BY d.year, d.quarter
-            ),
-            qtr_series AS (
-                {series_sql}
-            ),
-            base AS (
-                SELECT
-                    qs.year, qs.quarter,
-                    rd.product_sales,
-                    rd.freight_value,
-                    rd.order_item_count
-                FROM qtr_series qs
-                LEFT JOIN raw_data rd ON rd.year = qs.year AND rd.quarter = qs.quarter
-            )
-            SELECT
-                year, quarter,
-                ROUND(product_sales,    2) AS product_sales,
-                ROUND(freight_value,    2) AS freight_value,
-                order_item_count,
-                CASE
-                    WHEN product_sales IS NULL OR LAG(product_sales) OVER (ORDER BY year, quarter) IS NULL
-                         OR LAG(product_sales) OVER (ORDER BY year, quarter) = 0
-                    THEN NULL
-                    ELSE ROUND(
-                        (product_sales - LAG(product_sales) OVER (ORDER BY year, quarter))
-                        / LAG(product_sales) OVER (ORDER BY year, quarter) * 100, 2)
-                END AS qoq_product_sales_pct,
-                CASE
-                    WHEN freight_value IS NULL OR LAG(freight_value) OVER (ORDER BY year, quarter) IS NULL
-                         OR LAG(freight_value) OVER (ORDER BY year, quarter) = 0
-                    THEN NULL
-                    ELSE ROUND(
-                        (freight_value - LAG(freight_value) OVER (ORDER BY year, quarter))
-                        / LAG(freight_value) OVER (ORDER BY year, quarter) * 100, 2)
-                END AS qoq_freight_value_pct,
-                CASE
-                    WHEN order_item_count IS NULL OR LAG(order_item_count) OVER (ORDER BY year, quarter) IS NULL
-                         OR LAG(order_item_count) OVER (ORDER BY year, quarter) = 0
-                    THEN NULL
-                    ELSE ROUND(
-                        (order_item_count - LAG(order_item_count) OVER (ORDER BY year, quarter))::numeric
-                        / LAG(order_item_count) OVER (ORDER BY year, quarter) * 100, 2)
-                END AS qoq_order_item_count_pct
-            FROM base
-            ORDER BY year, quarter
-            """
+            # QoQ cùng kỳ, tính trên toàn chuỗi rồi mới lọc năm (quý 1 vẫn so được với quý 4 năm trước)
+            sql, params = growth.quarter_sql(int(year) if year else None)
 
         else:  # level == 'year'
-            sql = """
-            WITH
-            yearly_raw AS (
-                SELECT d.year,
-                    SUM(fs.price)         AS product_sales,
-                    SUM(fs.freight_value) AS freight_value,
-                    COUNT(*)              AS order_item_count
-                FROM dw.fact_sales fs
-                JOIN dw.dim_date d         ON fs.purchase_date_key = d.date_key
-                JOIN dw.fact_customer_order fco ON fs.order_id = fco.order_id
-                WHERE fco.order_status = 'delivered'
-                GROUP BY d.year
-            ),
-            year_series AS (
-                SELECT generate_series(
-                    (SELECT MIN(year) FROM dw.dim_date
-                     WHERE date_key IN (SELECT purchase_date_key FROM dw.fact_sales)),
-                    (SELECT MAX(year) FROM dw.dim_date
-                     WHERE date_key IN (SELECT purchase_date_key FROM dw.fact_sales))
-                )::int AS year
-            ),
-            base AS (
-                SELECT ys.year, yr.product_sales, yr.freight_value, yr.order_item_count
-                FROM year_series ys
-                LEFT JOIN yearly_raw yr USING (year)
-            )
-            SELECT
-                year,
-                ROUND(product_sales,    2) AS product_sales,
-                ROUND(freight_value,    2) AS freight_value,
-                order_item_count,
-                CASE
-                    WHEN product_sales IS NULL OR LAG(product_sales) OVER (ORDER BY year) IS NULL
-                         OR LAG(product_sales) OVER (ORDER BY year) = 0
-                    THEN NULL
-                    ELSE ROUND(
-                        (product_sales - LAG(product_sales) OVER (ORDER BY year))
-                        / LAG(product_sales) OVER (ORDER BY year) * 100, 2)
-                END AS yoy_product_sales_pct,
-                CASE
-                    WHEN freight_value IS NULL OR LAG(freight_value) OVER (ORDER BY year) IS NULL
-                         OR LAG(freight_value) OVER (ORDER BY year) = 0
-                    THEN NULL
-                    ELSE ROUND(
-                        (freight_value - LAG(freight_value) OVER (ORDER BY year))
-                        / LAG(freight_value) OVER (ORDER BY year) * 100, 2)
-                END AS yoy_freight_value_pct,
-                CASE
-                    WHEN order_item_count IS NULL OR LAG(order_item_count) OVER (ORDER BY year) IS NULL
-                         OR LAG(order_item_count) OVER (ORDER BY year) = 0
-                    THEN NULL
-                    ELSE ROUND(
-                        (order_item_count - LAG(order_item_count) OVER (ORDER BY year))::numeric
-                        / LAG(order_item_count) OVER (ORDER BY year) * 100, 2)
-                END AS yoy_order_item_count_pct
-            FROM base
-            ORDER BY year
-            """
+            sql, params = growth.year_sql()
 
         try:
-            data = gateway.fetch_all(sql)
+            data = gateway.fetch_all(sql, params)
             # Chuyển đổi full_date sang string nếu có
             for row in data:
                 if 'full_date' in row and row['full_date'] is not None:

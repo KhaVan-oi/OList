@@ -1,4 +1,4 @@
--- Nạp dữ liệu vào Data Warehouse schema dw theo tài liệu Fix.md
+-- Nạp dữ liệu vào Data Warehouse schema dw
 -- Thứ tự: Dimension trước -> Fact_Customer_Order -> Fact_Sales
 
 -- 1. Nạp Dim_Date

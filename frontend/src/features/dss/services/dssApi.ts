@@ -27,6 +27,8 @@ export type DssOptions = {
 export type ModelMetric = {
   model: ModelName
   wape: number | null
+  /** MASE (Hyndman & Koehler 2006): sai số chia MAE naive trong mẫu. So giữa các mô hình, càng nhỏ càng tốt. */
+  mase: number | null
   mape: number | null
   bias: number | null
   wape_ex_event: number | null
@@ -71,8 +73,8 @@ export type DssForecast = {
 export type AccuracyLevel = {
   level: string
   n_series: number
-  models: { model: ModelName; wape: number | null; wape_ex_event: number | null }[]
-  series: { name: string; wape: number | null; wape_naive: number | null }[]
+  models: { model: ModelName; wape: number | null; wape_ex_event: number | null; mase: number | null }[]
+  series: { name: string; wape: number | null; wape_naive: number | null; mase: number | null }[]
 }
 
 export type DssAccuracy = {

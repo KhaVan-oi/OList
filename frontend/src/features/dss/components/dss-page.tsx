@@ -21,7 +21,7 @@ import { FilterSelect, filterBarClass } from '../../../components/ui/filter-sele
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '../../../components/ui/table.tsx'
 import { chartFreight, chartGrid, chartMuted, chartSales, chartTick } from '../../../lib/chart.ts'
 import { axisMoney } from '../../../lib/format.ts'
-import { categoryLabel, decimal1, formatMetric, monthLabel, ratio, signedMetric } from '../format.ts'
+import { categoryLabel, decimal1, formatMetric, masePlain, monthLabel, ratio, signedMetric } from '../format.ts'
 import {
   getDssAccuracy,
   getDssForecast,
@@ -220,7 +220,7 @@ export function DssPage() {
                   <div className="space-y-2">
                     <h3 className="text-base font-semibold">Sai số theo mức chi tiết</h3>
                     <p className="text-xs text-muted-foreground">
-                      Giá trị trong ngoặc là sai số khi bỏ Black Friday.
+                      Dòng trên: WAPE, trong ngoặc là WAPE khi bỏ Black Friday.
                     </p>
                     <Table>
                       <TableHeader>
@@ -241,6 +241,7 @@ export function DssPage() {
                                 <TableCell key={model} className="text-right tabular-nums">
                                   {ratio(cell?.wape)}
                                   <span className="ml-1 text-xs text-muted-foreground">({ratio(cell?.wape_ex_event)})</span>
+                                  <span className="block text-xs text-muted-foreground">MASE {masePlain(cell?.mase)}</span>
                                 </TableCell>
                               )
                             })}
@@ -329,6 +330,7 @@ function TechnicalDetails({ data, children }: { data: DssForecast; children: Rea
                 <TableHead>Cách dự báo</TableHead>
                 <TableHead className="text-right">Sai số</TableHead>
                 <TableHead className="text-right">Sai số khi bỏ Black Friday</TableHead>
+                <TableHead className="text-right">MASE</TableHead>
                 <TableHead className="text-right">Lệch trung bình</TableHead>
               </TableRow>
             </TableHeader>
@@ -344,6 +346,7 @@ function TechnicalDetails({ data, children }: { data: DssForecast; children: Rea
                     </TableCell>
                     <TableCell className="text-right tabular-nums">{ratio(row?.wape)}</TableCell>
                     <TableCell className="text-right tabular-nums">{ratio(row?.wape_ex_event)}</TableCell>
+                    <TableCell className="text-right tabular-nums">{masePlain(row?.mase)}</TableCell>
                     <TableCell className="text-right tabular-nums">{ratio(row?.bias)}</TableCell>
                   </TableRow>
                 )
