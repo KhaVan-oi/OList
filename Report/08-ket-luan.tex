@@ -1,0 +1,16 @@
+\section{Kết luận, hạn chế và hướng phát triển}
+\subsection{Kết quả đạt được}
+Dự án xây dựng một kho dữ liệu đa chiều gồm staging, bốn dimension và hai fact (grain dòng hàng và grain đơn), nạp bằng pipeline COPY và SQL, có bộ nghiệm thu F1--F7 và chạy trong một giao dịch (chỉ commit khi hợp lệ). Việc tách grain thanh toán khỏi dòng hàng tránh nhân bản tiền, và định danh khách duy nhất cho phép phân tích mua lại. Trên kho là một ứng dụng web có API Flask và sáu màn hình: Tổng quan, Thời gian, Khu vực, Người bán, Khách hàng và Quyết định, hỗ trợ các thao tác drill-down, roll-up, slice, dice và pivot. Tăng trưởng theo năm và quý được tính cùng kỳ để không bị sai lệch bởi dữ liệu thiếu tháng.
+
+Thành phần DSS dự báo nhu cầu theo tháng và đề xuất lượng nhập với mức an toàn do người dùng chọn. Với tháng 09/2018, hệ thống dự báo 7.065 món và đề xuất nhập khoảng 7.519 món ở mức 90\%, với sai số WAPE 11,2\% ở mức toàn kho. Phân khúc khách hàng đã được thử và bị loại do dữ liệu không chứa tín hiệu về việc khách quay lại.
+
+\subsection{Hạn chế}
+\begin{itemize}[leftmargin=*]
+\item Dữ liệu chỉ phủ khoảng 24 tháng, năm 2016 rất thưa; mẫu backtest DSS chỉ 12--14 tháng nên đệm nhập hàng là ước lượng thô. Tỷ lệ thiếu hàng đo được (16,7\%) cao hơn mức danh nghĩa 10\%, nhưng một tháng đã làm con số đổi khoảng 8,3 điểm phần trăm; sai số ở mức bang và danh mục cũng lớn hơn toàn kho vì mỗi chuỗi chỉ có vài trăm món mỗi tháng. Các kết quả chưa tốt này nên được đọc là hệ quả của dữ liệu ít, và cần chuỗi dài hơn mới kết luận được về mô hình.
+\item DSS chỉ dự báo trước một tháng, chưa có khoảng dự báo, chưa xét tồn kho hiện có, giá vốn hay khuyến mãi.
+\item Kho không có SCD, loại thanh toán, review và thời gian giao hàng; chưa nạp tăng dần nên mỗi lần nạp lại phải xây lại toàn bộ.
+\item Chưa đo hiệu năng và chưa kiểm thử giao diện trên nhiều trình duyệt hoặc màn hình hẹp.
+\end{itemize}
+
+\subsection{Hướng phát triển}
+Bổ sung dữ liệu nhiều tháng hơn để kiểm chứng đệm nhập hàng và sai số ở mức bang, danh mục; nạp thêm review, thời gian giao hàng và loại thanh toán để mở rộng chiều phân tích; nạp tăng dần và logging; dự báo nhiều tháng kèm khoảng dự báo; bổ sung giá vốn và dữ liệu khuyến mãi để có thể đánh giá kịch bản định giá.

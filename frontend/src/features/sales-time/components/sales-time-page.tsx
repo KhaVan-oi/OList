@@ -21,6 +21,7 @@ import {
   diceGroupOf,
   endpointFor,
   KPI_OPTIONS,
+  kpiKeyOf,
   matrixEndpointFor,
   monthsOfQuarter,
   operationOf,
@@ -283,6 +284,15 @@ export function SalesTimePage() {
       ? [year]
       : YEARS
   const matrixMonths = month ? [Number(month)] : monthsOfQuarter(quarter)
+
+  // Pivot: API trả mỗi tháng một dòng {month, val_2016, val_2017, val_2018}. Đổi sang dạng dài
+  // {year, month, <measure>} để dùng lại MatrixTable (cùng định dạng tiền / số lượng với bảng Ma trận).
+  const kpiField = kpiKeyOf(activeKpi)
+  const pivotRows: Row[] = isPivot
+    ? (query.data?.data ?? []).flatMap((r) =>
+        YEARS.map((y) => ({ year: y, month: r.month, [kpiField]: r[`val_${y}`] ?? null })),
+      )
+    : []
 
   const tableCols = isDice ? DICE_COLS[diceGroup] : TIME_COLS[level]
 
@@ -567,9 +577,10 @@ export function SalesTimePage() {
       <Card>
         <CardHeader>
           <CardTitle>
-            {tableMode === 'matrix' ? `Ma trận Tháng × Năm — ${kpiLabel}` : 'Dữ liệu chi tiết'}
+            {tableMode === 'matrix' || isPivot ? `Ma trận Tháng × Năm — ${kpiLabel}` : 'Dữ liệu chi tiết'}
           </CardTitle>
-          {/* Chuyển đổi chế độ bảng: Mặc định / Ma trận (giữ nguyên bộ lọc) */}
+          {/* Chuyển đổi chế độ bảng: Mặc định / Ma trận (giữ nguyên bộ lọc). Pivot vốn là ma trận nên không cần. */}
+          {!isPivot && (
           <CardAction>
             <div className="inline-flex items-center gap-1 rounded-xl border border-border bg-muted p-1">
               <button
@@ -599,9 +610,14 @@ export function SalesTimePage() {
               </button>
             </div>
           </CardAction>
+          )}
         </CardHeader>
         <CardContent>
-          {tableMode === 'matrix' && !isPivot ? (
+          {isPivot ? (
+            <QueryState loading={query.isLoading} error={query.error}>
+              <MatrixTable rows={pivotRows} activeKpi={activeKpi} years={YEARS} months={monthsOfQuarter('')} />
+            </QueryState>
+          ) : tableMode === 'matrix' ? (
             <QueryState loading={matrix.isLoading} error={matrix.error}>
               <MatrixTable
                 rows={matrix.data?.data ?? []}

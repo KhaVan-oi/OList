@@ -98,6 +98,7 @@ def run_pipeline(rebuild_schema: bool = True):
         print("[!] Không thể kết nối hoặc khởi tạo database. Vui lòng kiểm tra lại cấu hình .env!")
         sys.exit(1)
 
+    # Toàn bộ pipeline chạy trong MỘT giao dịch (DDL của PostgreSQL cũng có giao dịch): hợp lệ mới commit.
     conn = get_connection(autocommit=False)
     cur = conn.cursor()
 
@@ -111,7 +112,6 @@ def run_pipeline(rebuild_schema: bool = True):
             print("\n[Bước 1/6] Tạo schema 'staging' (01_schema.sql)...")
             schema_sql = read_sql_file(SQL_DIR / "staging" / "01_schema.sql")
             cur.execute(schema_sql)
-            conn.commit()
             print("  -> Schema 'staging' và các bảng cấu trúc đã tạo thành công.")
         else:
             print("\n[Bước 1/6] Schema staging đã có sẵn -> Làm sạch dữ liệu bảng raw...")
@@ -125,7 +125,6 @@ def run_pipeline(rebuild_schema: bool = True):
                     staging.raw_sellers,
                     staging.raw_category_translation;
             """)
-            conn.commit()
 
         # Bước 2: Nạp dữ liệu CSV vào bảng staging.raw_* bằng copy_expert
         print("\n[Bước 2/6] Nạp dữ liệu từ 7 file CSV vào bảng raw...")
@@ -141,7 +140,6 @@ def run_pipeline(rebuild_schema: bool = True):
                     f"COPY {table} FROM STDIN WITH (FORMAT csv, HEADER true, ENCODING 'UTF8')",
                     f
                 )
-            conn.commit()
             cur.execute(f"SELECT count(*) FROM {table}")
             cnt = cur.fetchone()[0]
             print(f"     Xong: {cnt:,} dòng ({time.time() - t0:.2f}s)")
@@ -151,7 +149,6 @@ def run_pipeline(rebuild_schema: bool = True):
         t0 = time.time()
         promote_sql = read_sql_file(SQL_DIR / "staging" / "03_promote.sql")
         cur.execute(promote_sql)
-        conn.commit()
         print(f"  -> Hoàn thành promote sang staging ({time.time() - t0:.2f}s)")
 
         # Bước 4: Kiểm tra dữ liệu staging
@@ -171,10 +168,9 @@ def run_pipeline(rebuild_schema: bool = True):
 
         # Bước 5: Tạo schema kho dữ liệu dw
         if rebuild_schema or not has_dw:
-            print("\n[Bước 5/6] Tạo schema 'dw' (sql/dw/dss.sql)...")
-            dw_schema_sql = read_sql_file(SQL_DIR / "dw" / "dss.sql")
+            print("\n[Bước 5/6] Tạo schema 'dw' (sql/dw/dw_schema.sql)...")
+            dw_schema_sql = read_sql_file(SQL_DIR / "dw" / "dw_schema.sql")
             cur.execute(dw_schema_sql)
-            conn.commit()
             print("  -> Schema 'dw' (dim_date, dim_customer, dim_product, dim_seller, fact_customer_order, fact_sales) đã tạo.")
         else:
             print("\n[Bước 5/6] Schema 'dw' đã có sẵn -> Làm sạch bảng DW...")
@@ -188,24 +184,23 @@ def run_pipeline(rebuild_schema: bool = True):
                     dw.dim_seller
                 CASCADE;
             """)
-            conn.commit()
 
         # Bước 6: Nạp dữ liệu vào kho hình sao dw (02_load.sql)
         print("\n[Bước 6/6] Nạp dữ liệu vào các bảng Dimension và Fact (02_load.sql)...")
         t0 = time.time()
         dw_load_sql = read_sql_file(SQL_DIR / "dw" / "02_load.sql")
         cur.execute(dw_load_sql)
-        conn.commit()
         print(f"  -> Nạp Dimension & Fact thành công ({time.time() - t0:.2f}s)")
 
         # Nghiệm thu: 03_validate.sql ném lỗi nếu sai (rollback ở except bên dưới)
         run_acceptance_tests(cur)
-        conn.commit()
 
         # Tạo lại view nguồn cho DSS (bước 5 đã DROP SCHEMA dw CASCADE nên view bị xóa theo).
         # Đối soát view với fact_sales vẫn do run_dss_01.py làm.
         print("\n[Hậu kỳ] Tạo view DSS dw.v_dss_monthly_demand (sql/dss/01_demand_mart.sql)...")
         cur.execute(read_sql_file(SQL_DIR / "dss" / "01_demand_mart.sql"))
+
+        # Chỉ commit khi MỌI bước (nạp, nghiệm thu, view DSS) đều thành công; lỗi ở bất kỳ bước nào -> rollback toàn bộ.
         conn.commit()
         print("  -> View DSS đã tạo.")
 

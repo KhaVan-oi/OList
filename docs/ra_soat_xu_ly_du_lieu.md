@@ -71,7 +71,7 @@ sử từ 2017-01.
   Công thức không đổi, chỉ bổ sung nguồn.
 - **Thêm MASE** (Hyndman & Koehler 2006, *IJF* 22(4), 679–688): sai số chia MAE của naive một bước trong mẫu. Trong
   backtest trượt, mẫu số ở tháng t chỉ dùng `values[:t]`, nên không rò rỉ thông tin tương lai (có unit test).
-- Kết quả (số món, blend so với naive): toàn kho 0,89 so với 0,97; 10 bang 1,01 so với 1,12; 15 danh mục 1,23 so
+- Kết quả (số món, blend so với naive): toàn kho 0,88 so với 0,97; 10 bang 1,01 so với 1,12; 15 danh mục 1,23 so
   với 1,27. Ở mức bang và danh mục, chính naive cũng có MASE > 1, vì giai đoạn kiểm tra biến động mạnh hơn lịch sử.
   Vì vậy **so MASE giữa các mô hình**, không so với mốc 1.
 - WAPE, lượng nhập (7.518,82 món) và đường đánh đổi không đổi. Thay đổi chỉ thêm thông tin.

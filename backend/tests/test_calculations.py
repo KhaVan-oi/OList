@@ -109,6 +109,30 @@ class GrowthSqlTest(unittest.TestCase):
         self._assert_only_placeholders(*growth.month_sql())
         self._assert_only_placeholders(*growth.month_sql(2017, 3))
 
+    def test_mom_skips_thin_previous_month(self):
+        month_sql, _ = growth.month_sql()
+        for m in growth.MEASURES:
+            self.assertIn(f"LAG({m}) OVER (ORDER BY year, month) < floor_{m} THEN NULL", month_sql)
+        floors = growth.thin_floor_sql("monthly", growth.MEASURES)
+        self.assertIn(f"{growth.THIN_MONTH_RATIO} * percentile_cont(0.5)", floors)
+        self.assertIn("AS floor_order_item_count", floors)
+
+    def test_qoq_skips_thin_month_pairs(self):
+        quarter_sql, _ = growth.quarter_sql()
+        for m in growth.MEASURES:
+            self.assertIn(
+                f"SUM(CASE WHEN cur.{m} >= f.floor_{m} AND prev.{m} >= f.floor_{m} THEN prev.{m} END) AS prev_{m}",
+                quarter_sql,
+            )
+        self.assertIn("CROSS JOIN floors f", quarter_sql)
+
+    def test_yoy_needs_min_valid_months(self):
+        year_sql, _ = growth.year_sql()
+        self.assertIn("CROSS JOIN floors f", year_sql)
+        self.assertIn(f"WHEN COALESCE(s.months_compared, 0) < {growth.MIN_YOY_MONTHS} THEN NULL", year_sql)
+        quarter_sql, _ = growth.quarter_sql()
+        self.assertNotIn("COALESCE(s.months_compared, 0) <", quarter_sql)  # QoQ không có điều kiện số tháng
+
     def test_like_for_like_join_conditions(self):
         year_sql, _ = growth.year_sql()
         self.assertIn("prev.year = cur.year - 1 AND prev.month = cur.month", year_sql)

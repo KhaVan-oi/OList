@@ -3,6 +3,8 @@
 --   F1..F7: khối DO bên dưới, sai một điều là RAISE EXCEPTION và cả giao dịch bị hủy.
 --   F8    : các câu SELECT cuối file, báo cáo KPI để người đọc tự đối chiếu.
 -- Nguyên tắc: kiểm tra BẤT BIẾN (khóa, đối soát tổng, miền giá trị), không gõ cứng số đếm của bộ dữ liệu.
+-- So sánh hai giá trị dùng IS DISTINCT FROM thay cho <>: <> trả NULL khi một vế NULL (ví dụ tổng của bảng rỗng)
+-- nên điều kiện IF không bao giờ đúng và lỗi bị bỏ lọt.
 
 DO $$
 DECLARE
@@ -55,7 +57,7 @@ BEGIN
     -- [F1] Đối soát doanh số và phí vận chuyển
     SELECT round(sum(price), 2), round(sum(freight_value), 2) INTO sales_price, sales_freight FROM dw.fact_sales;
     SELECT round(sum(price), 2), round(sum(freight_value), 2) INTO stg_price, stg_freight FROM staging.stg_order_items;
-    IF sales_price <> stg_price OR sales_freight <> stg_freight THEN
+    IF sales_price IS DISTINCT FROM stg_price OR sales_freight IS DISTINCT FROM stg_freight THEN
         RAISE EXCEPTION 'F1. Lệch tổng tiền: Fact (price: %, freight: %) vs Staging (price: %, freight: %)', 
             sales_price, sales_freight, stg_price, stg_freight;
     END IF;
@@ -83,7 +85,7 @@ BEGIN
     SELECT count(*) INTO date_mismatch_facts
     FROM dw.fact_sales s
     JOIN dw.fact_customer_order o ON o.order_id = s.order_id
-    WHERE s.purchase_date_key <> o.purchase_date_key;
+    WHERE s.purchase_date_key IS DISTINCT FROM o.purchase_date_key;
     IF date_mismatch_facts <> 0 THEN
         RAISE EXCEPTION 'F2. Lệch purchase_date_key giữa Fact_Sales và Fact_Customer_Order: % dòng', date_mismatch_facts;
     END IF;
@@ -91,7 +93,7 @@ BEGIN
     SELECT count(*) INTO cust_mismatch_facts
     FROM dw.fact_sales s
     JOIN dw.fact_customer_order o ON o.order_id = s.order_id
-    WHERE s.customer_key <> o.customer_key;
+    WHERE s.customer_key IS DISTINCT FROM o.customer_key;
     IF cust_mismatch_facts <> 0 THEN
         RAISE EXCEPTION 'F2. Lệch customer_key giữa Fact_Sales và Fact_Customer_Order: % dòng', cust_mismatch_facts;
     END IF;
@@ -122,7 +124,7 @@ BEGIN
         FROM dw.fact_customer_order f
         JOIN staging.stg_order_payments p ON p.order_id = f.order_id
         GROUP BY f.order_id, f.total_payment_value
-        HAVING f.total_payment_value <> round(sum(p.payment_value), 2)
+        HAVING f.total_payment_value IS DISTINCT FROM round(sum(p.payment_value), 2)
     ) diff;
     IF pay_mismatch <> 0 THEN
         RAISE EXCEPTION 'F4. Có % đơn hàng có total_payment_value lệch với sum(payment_value)', pay_mismatch;
@@ -159,7 +161,7 @@ BEGIN
         FROM (SELECT order_status, count(*) AS cnt FROM staging.stg_orders GROUP BY order_status) s
         FULL JOIN (SELECT order_status, count(*) AS cnt FROM dw.fact_customer_order GROUP BY order_status) d
         ON d.order_status = s.order_status
-        WHERE s.cnt <> d.cnt OR s.cnt IS NULL OR d.cnt IS NULL
+        WHERE s.cnt IS DISTINCT FROM d.cnt
     ) t;
     IF status_mismatch <> 0 THEN
         RAISE EXCEPTION 'F5. Có trạng thái đơn hàng bị lệch số lượng giữa Staging và Fact: % loại trạng thái', status_mismatch;
@@ -168,13 +170,13 @@ BEGIN
     -- [F6] Tính nhất quán Dim_Date
     SELECT count(*) INTO date_consistency_err
     FROM dw.dim_date
-    WHERE year <> EXTRACT(YEAR FROM full_date)
-       OR quarter <> EXTRACT(QUARTER FROM full_date)
-       OR month <> EXTRACT(MONTH FROM full_date)
-       OR day_of_month <> EXTRACT(DAY FROM full_date)
-       OR day_of_week <> EXTRACT(ISODOW FROM full_date)
-       OR is_weekend <> (EXTRACT(ISODOW FROM full_date) IN (6, 7))
-       OR date_key <> (EXTRACT(YEAR FROM full_date)::int * 10000 + EXTRACT(MONTH FROM full_date)::int * 100 + EXTRACT(DAY FROM full_date)::int);
+    WHERE year IS DISTINCT FROM EXTRACT(YEAR FROM full_date)
+       OR quarter IS DISTINCT FROM EXTRACT(QUARTER FROM full_date)
+       OR month IS DISTINCT FROM EXTRACT(MONTH FROM full_date)
+       OR day_of_month IS DISTINCT FROM EXTRACT(DAY FROM full_date)
+       OR day_of_week IS DISTINCT FROM EXTRACT(ISODOW FROM full_date)
+       OR is_weekend IS DISTINCT FROM (EXTRACT(ISODOW FROM full_date) IN (6, 7))
+       OR date_key IS DISTINCT FROM (EXTRACT(YEAR FROM full_date)::int * 10000 + EXTRACT(MONTH FROM full_date)::int * 100 + EXTRACT(DAY FROM full_date)::int);
     IF date_consistency_err <> 0 THEN
         RAISE EXCEPTION 'F6. Có % bản ghi trong Dim_Date không nhất quán với full_date', date_consistency_err;
     END IF;

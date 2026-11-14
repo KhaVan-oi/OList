@@ -126,8 +126,8 @@ python backend/run.py          # API cổng 5050
 cd frontend && npm run dev     # mở /quyet-dinh
 ```
 
-Lưu ý: `etl_pipeline.py` chạy `sql/dw/dss.sql`, file này bắt đầu bằng `DROP SCHEMA dw CASCADE`. Tên file là lịch
-sử, không liên quan đến phần "DSS". Lệnh này xóa view DSS, nên `run_pipeline` có thêm một bước sau nghiệm thu để chạy
+Lưu ý: `etl_pipeline.py` chạy `sql/dw/dw_schema.sql` (trước đây tên `dss.sql`), file này bắt đầu bằng
+`DROP SCHEMA dw CASCADE`. Lệnh này xóa view DSS, nên `run_pipeline` có thêm một bước sau nghiệm thu để chạy
 lại `sql/dss/01_demand_mart.sql`. Bước này **đã được chạy qua một lần ETL đầy đủ ngày 12/11/2026**, và
 `run_dss_01.py` sau đó đối soát PASS (13.221.498,11 R$; 110.197 món). `run_dss_01.py` vẫn giữ vai trò đối soát.
 
@@ -149,8 +149,8 @@ lại `sql/dss/01_demand_mart.sql`. Bước này **đã được chạy qua mộ
 | Lượng nhập đề xuất ở phân vị 90% (đã bỏ Black Friday khỏi mẫu sai số) | 7.518,82 món (đệm +453,64 món, +6,4%, 12 tháng trong mẫu) |
 | Tỷ lệ tháng thiếu hàng thực nghiệm (leave-one-out) ở phân vị 90% | 16,7% (2 trên 12 tháng) |
 | WAPE toàn kho: kết hợp, tháng trước | 11,2%, 12,2% (bỏ Black Friday: 7,4%, 7,5%) |
-| MASE toàn kho / 10 bang / 15 danh mục: kết hợp | 0,89 / 1,01 / 1,23 (tháng trước: 0,97 / 1,12 / 1,27) |
-| WAPE 10 bang lớn: kết hợp, tháng trước | 13,0%, 15,0% |
+| MASE toàn kho / 10 bang / 15 danh mục: kết hợp | 0,88 / 1,01 / 1,23 (tháng trước: 0,97 / 1,12 / 1,27) |
+| WAPE 10 bang lớn: kết hợp, tháng trước | 12,9%, 15,0% |
 | WAPE 15 danh mục lớn: kết hợp, tháng trước | 20,0%, 20,7% |
 
 ## 6. Chưa làm hoặc chưa kiểm tra

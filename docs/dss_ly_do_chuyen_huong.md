@@ -93,7 +93,7 @@ Con số dưới đây là của hệ thống DSS (`/api/dss/accuracy`).
 | Mức tổng hợp | WAPE mô hình mặc định (kết hợp) | Baseline "tháng trước" | Bỏ Black Friday: kết hợp / tháng trước |
 |---|---|---|---|
 | Tổng toàn kho | 11,2% | 12,2% | 7,4% / 7,5% |
-| 10 bang lớn | 13,0% | 15,0% | 9,3% / 10,6% |
+| 10 bang lớn | 12,9% | 15,0% | 9,3% / 10,6% |
 | 15 danh mục lớn | 20,0% | 20,7% | 16,7% / 16,9% |
 
 Kết quả này không loại trừ rủi ro nhưng khác hẳn các hướng trên ở ba điểm:

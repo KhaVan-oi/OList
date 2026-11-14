@@ -195,7 +195,7 @@ Vị trí mã: `backend/app/features/dss/forecast.py` (viết tắt `forecast.py
 - **Cách đọc, cần nói rõ khi trình bày:** ở mức 10 bang và 15 danh mục, **chính naive cũng có MASE > 1** (số món: 1,12
   và 1,27). Lý do là giai đoạn kiểm tra 2017-07 đến 2018-08 biến động mạnh hơn phần lịch sử dùng làm mẫu số. Vì vậy
   không đọc "MASE < 1 là hơn naive" ở đây, mà **so MASE giữa các mô hình trong cùng một hàng**. Kết quả (số món, blend
-  so với naive): toàn kho 0,89 so với 0,97; 10 bang 1,01 so với 1,12; 15 danh mục 1,23 so với 1,27. Thứ tự này khớp
+  so với naive): toàn kho 0,88 so với 0,97; 10 bang 1,01 so với 1,12; 15 danh mục 1,23 so với 1,27. Thứ tự này khớp
   với WAPE.
 - **Vì sao chưa thêm kiểm định Diebold–Mariano:** chỉ có 12–14 tháng kiểm tra, kiểm định gần như luôn ra "chưa đủ bằng
   chứng", và phải thêm thư viện `scipy`. Nhóm chọn báo cáo hai thước đo thay vì khẳng định ý nghĩa thống kê.
@@ -226,7 +226,7 @@ Vị trí mã: `backend/app/features/dss/forecast.py` (viết tắt `forecast.py
 ### 5.2. Mô hình sao và ETL 📚
 
 - Kho dùng mô hình sao với `dim_date`, `dim_customer`, `dim_product`, `dim_seller`, `fact_customer_order`, `fact_sales`
-  (`sql/dw/dss.sql`), và tầng staging trước khi nạp.
+  (`sql/dw/dw_schema.sql`), và tầng staging trước khi nạp.
 - **Nguồn lý thuyết:** R. Kimball, M. Ross, *The Data Warehouse Toolkit* (3rd ed., Wiley, 2013), tài liệu tham khảo [2] của đề bài. Chưa
   đối chiếu số chương cụ thể, cần bổ sung khi viết báo cáo.
 

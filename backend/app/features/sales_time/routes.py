@@ -317,6 +317,18 @@ def create_sales_time_blueprint(gateway: QueryGateway):
               AND (d.year = {y} OR (d.year = {prev_year} AND d.month = 12))
             GROUP BY d.year, d.month
         ),
+        all_months AS (
+            -- Mọi tháng delivered, chỉ để tính ngưỡng tháng thưa (growth.THIN_MONTH_RATIO × trung vị)
+            SELECT SUM(fs.price) AS product_sales, SUM(fs.freight_value) AS freight_value, COUNT(*) AS order_item_count
+            FROM dw.fact_sales fs
+            JOIN dw.dim_date d         ON fs.purchase_date_key = d.date_key
+            JOIN dw.fact_customer_order fco ON fs.order_id = fco.order_id
+            WHERE fco.order_status = 'delivered'
+            GROUP BY d.year, d.month
+        ),
+        floors AS (
+            {growth.thin_floor_sql("all_months", growth.MEASURES)}
+        ),
         month_series AS (
             SELECT s_year AS year, s_month AS month
             FROM (
@@ -340,6 +352,7 @@ def create_sales_time_blueprint(gateway: QueryGateway):
                 CASE
                     WHEN product_sales IS NULL OR LAG(product_sales) OVER (ORDER BY year, month) IS NULL
                          OR LAG(product_sales) OVER (ORDER BY year, month) = 0
+                         OR LAG(product_sales) OVER (ORDER BY year, month) < floor_product_sales
                     THEN NULL
                     ELSE ROUND(
                         (product_sales - LAG(product_sales) OVER (ORDER BY year, month))
@@ -348,6 +361,7 @@ def create_sales_time_blueprint(gateway: QueryGateway):
                 CASE
                     WHEN freight_value IS NULL OR LAG(freight_value) OVER (ORDER BY year, month) IS NULL
                          OR LAG(freight_value) OVER (ORDER BY year, month) = 0
+                         OR LAG(freight_value) OVER (ORDER BY year, month) < floor_freight_value
                     THEN NULL
                     ELSE ROUND(
                         (freight_value - LAG(freight_value) OVER (ORDER BY year, month))
@@ -356,6 +370,7 @@ def create_sales_time_blueprint(gateway: QueryGateway):
                 CASE
                     WHEN order_item_count IS NULL OR LAG(order_item_count) OVER (ORDER BY year, month) IS NULL
                          OR LAG(order_item_count) OVER (ORDER BY year, month) = 0
+                         OR LAG(order_item_count) OVER (ORDER BY year, month) < floor_order_item_count
                     THEN NULL
                     ELSE ROUND(
                         (order_item_count - LAG(order_item_count) OVER (ORDER BY year, month))::numeric
@@ -365,7 +380,7 @@ def create_sales_time_blueprint(gateway: QueryGateway):
                 SUM(product_sales)    OVER (PARTITION BY year ORDER BY month) AS ytd_product_sales,
                 SUM(freight_value)    OVER (PARTITION BY year ORDER BY month) AS ytd_freight_value,
                 SUM(order_item_count) OVER (PARTITION BY year ORDER BY month) AS ytd_order_item_count
-            FROM slice_base
+            FROM slice_base CROSS JOIN floors
         )
         SELECT
             year, month,
@@ -544,16 +559,20 @@ def create_sales_time_blueprint(gateway: QueryGateway):
             ORDER BY ms.month
             """
         else:
-            # MoM growth: NULL cho tháng đầu tiên hoặc khi tháng trước thiếu dữ liệu/= 0
+            # MoM growth: NULL cho tháng đầu tiên hoặc khi tháng trước thiếu dữ liệu, = 0
+            # hoặc quá thưa (dưới growth.THIN_MONTH_RATIO × trung vị các tháng)
             sql = f"""
             WITH
             monthly_all AS (
-                SELECT d.year, d.month, {kpi_expr} AS kpi_val
+                SELECT d.year, d.month, ({kpi_expr})::numeric AS kpi_val
                 FROM dw.fact_sales fs
                 JOIN dw.dim_date d         ON fs.purchase_date_key = d.date_key
                 JOIN dw.fact_customer_order fco ON fs.order_id = fco.order_id
                 WHERE fco.order_status = 'delivered'
                 GROUP BY d.year, d.month
+            ),
+            floors AS (
+                {growth.thin_floor_sql("monthly_all", ("kpi_val",))}
             ),
             mys AS (
                 SELECT y, m
@@ -571,12 +590,13 @@ def create_sales_time_blueprint(gateway: QueryGateway):
                     CASE
                         WHEN kpi_val IS NULL OR LAG(kpi_val) OVER (PARTITION BY year ORDER BY month) IS NULL
                              OR LAG(kpi_val) OVER (PARTITION BY year ORDER BY month) = 0
+                             OR LAG(kpi_val) OVER (PARTITION BY year ORDER BY month) < floor_kpi_val
                         THEN NULL
                         ELSE ROUND(
                             (kpi_val - LAG(kpi_val) OVER (PARTITION BY year ORDER BY month))
                             / LAG(kpi_val) OVER (PARTITION BY year ORDER BY month) * 100, 2)
                     END AS mom_pct
-                FROM full_base
+                FROM full_base CROSS JOIN floors
             )
             SELECT
                 month,

@@ -17,7 +17,7 @@ def get_db_config(target_db: str | None = None) -> dict:
     """
     return {
         "host": os.getenv("DB_HOST", "localhost"),
-        "port": int(os.getenv("DB_PORT", "5432")),
+        "port": int(os.getenv("DB_PORT", "5433")),
         "database": target_db or os.getenv("DB_NAME", "olist_dw"),
         "user": os.getenv("DB_USER", "postgres"),
         "password": os.getenv("DB_PASSWORD", ""),
@@ -115,7 +115,7 @@ def test_connection():
         print("\n[TIP] Check if:")
         print("  1. PostgreSQL service is running.")
         print("  2. DB_PASSWORD in .env is correct.")
-        print("  3. DB_PORT is 5432 (or matches your PostgreSQL installation).")
+        print("  3. DB_PORT is 5433 (or matches your PostgreSQL installation).")
         return False
 
 def query_df(sql: str, params: tuple | None = None) -> pd.DataFrame:

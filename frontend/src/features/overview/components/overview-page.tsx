@@ -73,6 +73,7 @@ export function OverviewPage() {
                 canDrill={false}
                 onDrill={() => {}}
                 heightClass="h-44"
+                showGrowth={false}
               />
             </QueryState>
           </CardContent>
