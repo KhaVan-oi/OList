@@ -21,6 +21,7 @@ import {
   diceGroupOf,
   endpointFor,
   KPI_OPTIONS,
+  kpiKeyOf,
   matrixEndpointFor,
   monthsOfQuarter,
   operationOf,
@@ -53,16 +54,30 @@ const MEASURE_COLS: Col[] = [
 ]
 
 function growthCols(prefix: 'yoy' | 'qoq' | 'mom'): Col[] {
+  // Năm và quý: backend so CÙNG KỲ (chỉ các tháng có ở cả hai kỳ), xem growth.py
+  const suffix = prefix === 'mom' ? '' : ' cùng kỳ'
   return [
-    { key: `${prefix}_product_sales_pct`, label: 'Tăng trưởng DT (%)' },
-    { key: `${prefix}_freight_value_pct`, label: 'Tăng trưởng Phí (%)' },
-    { key: `${prefix}_order_item_count_pct`, label: 'Tăng trưởng SL (%)' },
+    { key: `${prefix}_product_sales_pct`, label: `Tăng trưởng DT${suffix} (%)` },
+    { key: `${prefix}_freight_value_pct`, label: `Tăng trưởng Phí${suffix} (%)` },
+    { key: `${prefix}_order_item_count_pct`, label: `Tăng trưởng SL${suffix} (%)` },
   ]
 }
 
+/** Số tháng có dữ liệu của kỳ và số tháng dùng để so cùng kỳ */
+const COVERAGE_COLS: Col[] = [
+  { key: 'months_with_data', label: 'Số tháng có dữ liệu' },
+  { key: 'months_compared', label: 'Số tháng so cùng kỳ' },
+]
+
 const TIME_COLS: Record<TimeLevel, Col[]> = {
-  year: [{ key: 'year', label: 'Năm' }, ...MEASURE_COLS, ...growthCols('yoy')],
-  quarter: [{ key: 'year', label: 'Năm' }, { key: 'quarter', label: 'Quý' }, ...MEASURE_COLS, ...growthCols('qoq')],
+  year: [{ key: 'year', label: 'Năm' }, ...MEASURE_COLS, ...growthCols('yoy'), ...COVERAGE_COLS],
+  quarter: [
+    { key: 'year', label: 'Năm' },
+    { key: 'quarter', label: 'Quý' },
+    ...MEASURE_COLS,
+    ...growthCols('qoq'),
+    ...COVERAGE_COLS,
+  ],
   month: [{ key: 'year', label: 'Năm' }, { key: 'month', label: 'Tháng' }, ...MEASURE_COLS, ...growthCols('mom')],
   day: [
     { key: 'full_date', label: 'Ngày' },
@@ -269,6 +284,15 @@ export function SalesTimePage() {
       ? [year]
       : YEARS
   const matrixMonths = month ? [Number(month)] : monthsOfQuarter(quarter)
+
+  // Pivot: API trả mỗi tháng một dòng {month, val_2016, val_2017, val_2018}. Đổi sang dạng dài
+  // {year, month, <measure>} để dùng lại MatrixTable (cùng định dạng tiền / số lượng với bảng Ma trận).
+  const kpiField = kpiKeyOf(activeKpi)
+  const pivotRows: Row[] = isPivot
+    ? (query.data?.data ?? []).flatMap((r) =>
+        YEARS.map((y) => ({ year: y, month: r.month, [kpiField]: r[`val_${y}`] ?? null })),
+      )
+    : []
 
   const tableCols = isDice ? DICE_COLS[diceGroup] : TIME_COLS[level]
 
@@ -555,9 +579,10 @@ export function SalesTimePage() {
       <Card>
         <CardHeader>
           <CardTitle>
-            {tableMode === 'matrix' ? `Ma trận Tháng × Năm — ${kpiLabel}` : 'Dữ liệu chi tiết'}
+            {tableMode === 'matrix' || isPivot ? `Ma trận Tháng × Năm — ${kpiLabel}` : 'Dữ liệu chi tiết'}
           </CardTitle>
-          {/* Chuyển đổi chế độ bảng: Mặc định / Ma trận (giữ nguyên bộ lọc) */}
+          {/* Chuyển đổi chế độ bảng: Mặc định / Ma trận (giữ nguyên bộ lọc). Pivot vốn là ma trận nên không cần. */}
+          {!isPivot && (
           <CardAction>
             <div className="inline-flex items-center gap-1 rounded-xl border border-border bg-muted p-1">
               <button
@@ -587,9 +612,14 @@ export function SalesTimePage() {
               </button>
             </div>
           </CardAction>
+          )}
         </CardHeader>
         <CardContent>
-          {tableMode === 'matrix' && !isPivot ? (
+          {isPivot ? (
+            <QueryState loading={query.isLoading} error={query.error}>
+              <MatrixTable rows={pivotRows} activeKpi={activeKpi} years={YEARS} months={monthsOfQuarter('')} />
+            </QueryState>
+          ) : tableMode === 'matrix' ? (
             <QueryState loading={matrix.isLoading} error={matrix.error}>
               <MatrixTable
                 rows={matrix.data?.data ?? []}
@@ -601,6 +631,11 @@ export function SalesTimePage() {
           ) : (
             <QueryState loading={query.isLoading} error={query.error}>
               <DataTable rows={rows} cols={tableCols} activeKpi={activeKpi} />
+              {!isDice && (level === 'year' || level === 'quarter') ? (
+                <p className="mt-3 text-xs text-muted-foreground">
+                  Tăng trưởng {level === 'year' ? 'năm' : 'quý'} chỉ so <strong>cùng kỳ</strong>. Cột doanh thu vẫn là tổng đầy đủ của kỳ.
+                </p>
+              ) : null}
             </QueryState>
           )}
         </CardContent>

@@ -1,4 +1,4 @@
-BEGIN;
+-- Không BEGIN/COMMIT ở đây: giao dịch do etl_pipeline.py quản lý (chỉ commit khi nghiệm thu đạt).
 
 TRUNCATE
     staging.stg_order_items,
@@ -100,5 +100,3 @@ BEGIN
         END IF;
     END LOOP;
 END $$;
-
-COMMIT;

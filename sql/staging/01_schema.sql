@@ -1,4 +1,4 @@
--- Staging cho database dss, PostgreSQL 17 cổng 5435.
+-- Staging cho database olist_dw (kết nối theo .env, xem .env.example).
 -- Chạy lại file này sẽ xóa schema staging và tạo lại bảng rỗng.
 --
 -- raw_*: đủ cột CSV, kiểu TEXT, chưa khóa.

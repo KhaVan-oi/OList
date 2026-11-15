@@ -34,180 +34,57 @@ def read_sql_file(path: Path) -> str:
         return f.read()
 
 def run_acceptance_tests(cur):
-    """
-    Chạy toàn bộ các nội dung kiểm tra nghiệm thu theo mục 8 của tài liệu Fix.md (A -> E).
+    """Nghiệm thu kho sau khi nạp.
+
+    Kiểm tra (F1..F7) chỉ nằm ở sql/dw/03_validate.sql: sai một điều là RAISE EXCEPTION, hàm này ném lỗi theo.
+    Phần Python chỉ in số liệu đối soát để người đọc tự so (không lặp lại logic kiểm tra ở hai nơi).
     """
     print("\n" + "=" * 75)
-    print("📋 KIỂM TRA NGHIỆM THU DATA WAREHOUSE THEO MỤC 8 TÀI LIỆU FIX.MD")
+    print("KIỂM TRA NGHIỆM THU DATA WAREHOUSE (sql/dw/03_validate.sql)")
     print("=" * 75)
 
-    all_passed = True
-
-    # A. Kiểm tra Grain và trùng lặp
-    cur.execute("""
-        SELECT count(*)
-        FROM dw.fact_sales s
-        JOIN dw.fact_customer_order o ON o.order_id = s.order_id
-        WHERE s.purchase_date_key <> o.purchase_date_key
-           OR s.customer_key <> o.customer_key;
-    """)
-    mismatch_keys = cur.fetchone()[0]
+    notices_before = len(cur.connection.notices)
+    cur.execute(read_sql_file(SQL_DIR / "dw" / "03_validate.sql"))
+    for notice in cur.connection.notices[notices_before:]:
+        print("  " + notice.strip().removeprefix("NOTICE:").strip())
 
     cur.execute("""
-        SELECT count(*)
-        FROM dw.fact_sales s
-        LEFT JOIN dw.fact_customer_order o ON o.order_id = s.order_id
-        WHERE o.order_id IS NULL;
+        SELECT
+            (SELECT round(sum(price), 2) FROM dw.fact_sales),
+            (SELECT round(sum(price), 2) FROM staging.stg_order_items),
+            (SELECT round(sum(freight_value), 2) FROM dw.fact_sales),
+            (SELECT round(sum(freight_value), 2) FROM staging.stg_order_items),
+            (SELECT count(*) FROM dw.fact_sales),
+            (SELECT count(*) FROM staging.stg_order_items),
+            (SELECT count(*) FROM dw.fact_customer_order),
+            (SELECT count(*) FROM staging.stg_orders)
     """)
-    missing_orders_in_fact = cur.fetchone()[0]
+    f_price, s_price, f_freight, s_freight, f_items, s_items, f_orders, s_orders = cur.fetchone()
+    print(f"  F1. price   fact = {f_price:,.2f} | staging = {s_price:,.2f} R$")
+    print(f"      freight fact = {f_freight:,.2f} | staging = {s_freight:,.2f} R$")
+    print(f"  F2. dòng fact_sales = {f_items:,} / stg_order_items = {s_items:,}; "
+          f"đơn fact_customer_order = {f_orders:,} / stg_orders = {s_orders:,}")
 
-    p_f2 = (mismatch_keys == 0 and missing_orders_in_fact == 0)
-    all_passed &= p_f2
-    print(f"[{'PASS' if p_f2 else 'FAIL'}] F2. Tính nhất quán giữa 2 Fact Table:")
-    print(f"       * Đơn hàng lệch purchase_date_key hoặc customer_key: {mismatch_keys} (Kỳ vọng: 0)")
-    print(f"       * Đơn trong Fact_Sales thiếu ở Fact_Customer_Order: {missing_orders_in_fact} (Kỳ vọng: 0)")
-
-    # ---------------------------------------------------------
-    # [F3] Ánh xạ Product, Seller và Date
-    # ---------------------------------------------------------
-    cur.execute("SELECT count(*) FROM dw.fact_sales s LEFT JOIN dw.dim_product p ON p.product_key = s.product_key WHERE p.product_key IS NULL;")
-    miss_prod = cur.fetchone()[0]
-
-    cur.execute("SELECT count(*) FROM dw.fact_sales s LEFT JOIN dw.dim_seller sel ON sel.seller_key = s.seller_key WHERE sel.seller_key IS NULL;")
-    miss_seller = cur.fetchone()[0]
-
-    cur.execute("SELECT count(*) FROM dw.fact_sales s LEFT JOIN dw.dim_date d ON d.date_key = s.purchase_date_key WHERE d.date_key IS NULL;")
-    miss_sales_date = cur.fetchone()[0]
-
-    cur.execute("SELECT count(*) FROM dw.fact_customer_order o LEFT JOIN dw.dim_date d ON d.date_key = o.purchase_date_key WHERE d.date_key IS NULL;")
-    miss_order_date = cur.fetchone()[0]
-
-    p_f3 = (miss_prod == 0 and miss_seller == 0 and miss_sales_date == 0 and miss_order_date == 0)
-    all_passed &= p_f3
-    print(f"[{'PASS' if p_f3 else 'FAIL'}] F3. Ánh xạ Dimension (Product, Seller, Date, Customer):")
-    print(f"       * Thiếu Product: {miss_prod} | Thiếu Seller: {miss_seller} | Thiếu Date: {miss_sales_date + miss_order_date} (Kỳ vọng: 0)")
-
-    # ---------------------------------------------------------
-    # [F4] Đối soát thanh toán đầy đủ
-    # ---------------------------------------------------------
-    cur.execute("""
-        SELECT count(*)
-        FROM (
-            SELECT 
-                f.order_id,
-                f.total_payment_value,
-                round(sum(p.payment_value), 2) AS stg_pay
-            FROM dw.fact_customer_order f
-            JOIN staging.stg_order_payments p ON p.order_id = f.order_id
-            GROUP BY f.order_id, f.total_payment_value
-            HAVING f.total_payment_value <> round(sum(p.payment_value), 2)
-        ) diff;
-    """)
-    pay_diff = cur.fetchone()[0]
-
-    cur.execute("SELECT count(*) FROM dw.fact_customer_order WHERE total_payment_value IS NULL;")
-    null_pay = cur.fetchone()[0]
+    cur.execute("SELECT order_status, count(*) FROM dw.fact_customer_order GROUP BY 1 ORDER BY 2 DESC")
+    print("  F5. trạng thái đơn: " + ", ".join(f"{status}={n:,}" for status, n in cur.fetchall()))
 
     cur.execute("""
-        SELECT count(DISTINCT p.order_id)
-        FROM staging.stg_order_payments p
-        LEFT JOIN dw.fact_customer_order o ON o.order_id = p.order_id
-        WHERE o.order_id IS NULL;
+        SELECT count(*), round(sum(total_payment_value), 2), count(DISTINCT customer_key)
+        FROM dw.fact_customer_order WHERE order_status = 'delivered'
     """)
-    missing_pay_orders = cur.fetchone()[0]
+    deliv_orders, deliv_payment, deliv_customers = cur.fetchone()
+    print(f"  F8. delivered: {deliv_orders:,} đơn | thanh toán {deliv_payment:,.2f} R$ | "
+          f"{deliv_customers:,} khách duy nhất")
 
-    p_f4 = (pay_diff == 0 and null_pay == 1 and missing_pay_orders == 0)
-    all_passed &= p_f4
-    print(f"[{'PASS' if p_f4 else 'FAIL'}] F4. Đối soát thanh toán đầy đủ:")
-    print(f"       * Lệch tổng tiền thanh toán: {pay_diff} (Kỳ vọng: 0)")
-    print(f"       * Đơn không có payment (NULL chuẩn): {null_pay} đơn delivered (Kỳ vọng: 1)")
-    print(f"       * Đơn thanh toán thiếu ở Fact: {missing_pay_orders} (Kỳ vọng: 0)")
+    print("=" * 75)
+    print("KẾT QUẢ: F1 -> F7 đạt (03_validate.sql không ném lỗi).")
+    print("=" * 75)
+    return True
 
-    # ---------------------------------------------------------
-    # [F5] Kiểm tra trạng thái đơn hàng
-    # ---------------------------------------------------------
-    cur.execute("""
-        SELECT count(*)
-        FROM (SELECT order_status, count(*) AS cnt FROM staging.stg_orders GROUP BY order_status) s
-        FULL OUTER JOIN (SELECT order_status, count(*) AS cnt FROM dw.fact_customer_order GROUP BY order_status) d
-        ON s.order_status = d.order_status
-        WHERE s.cnt <> d.cnt OR s.cnt IS NULL OR d.cnt IS NULL;
-    """)
-    status_diff = cur.fetchone()[0]
-
-    p_f5 = (status_diff == 0)
-    all_passed &= p_f5
-    print(f"[{'PASS' if p_f5 else 'FAIL'}] F5. Kiểm tra trạng thái đơn hàng: Giữ trọn vẹn 8 trạng thái, lệch = {status_diff} (Kỳ vọng: 0)")
-
-    # ---------------------------------------------------------
-    # [F6] Tính nhất quán Dim_Date
-    # ---------------------------------------------------------
-    cur.execute("""
-        SELECT count(*)
-        FROM dw.dim_date
-        WHERE year <> EXTRACT(YEAR FROM full_date)
-           OR quarter <> EXTRACT(QUARTER FROM full_date)
-           OR month <> EXTRACT(MONTH FROM full_date)
-           OR day_of_month <> EXTRACT(DAY FROM full_date)
-           OR day_of_week <> EXTRACT(ISODOW FROM full_date)
-           OR is_weekend <> (EXTRACT(ISODOW FROM full_date) IN (6, 7))
-           OR date_key <> (EXTRACT(YEAR FROM full_date)::int * 10000 + EXTRACT(MONTH FROM full_date)::int * 100 + EXTRACT(DAY FROM full_date)::int);
-    """)
-    date_err = cur.fetchone()[0]
-
-    p_f6 = (date_err == 0)
-    all_passed &= p_f6
-    print(f"[{'PASS' if p_f6 else 'FAIL'}] F6. Tính nhất quán Dim_Date (year, month, quarter, day_of_week, date_key): Lỗi = {date_err} (Kỳ vọng: 0)")
-
-    # ---------------------------------------------------------
-    # [F7] Kiểm tra miền giá trị và NULL
-    # ---------------------------------------------------------
-    cur.execute("SELECT count(*) FROM dw.fact_sales WHERE price < 0 OR freight_value < 0;")
-    neg_sales = cur.fetchone()[0]
-
-    cur.execute("""
-        SELECT count(*) FROM dw.fact_sales
-        WHERE order_id IS NULL OR order_item_id IS NULL OR purchase_date_key IS NULL 
-           OR customer_key IS NULL OR product_key IS NULL OR seller_key IS NULL;
-    """)
-    null_sales_keys = cur.fetchone()[0]
-
-    cur.execute("SELECT count(*) FROM dw.fact_customer_order WHERE total_payment_value < 0;")
-    neg_payments = cur.fetchone()[0]
-
-    p_f7 = (neg_sales == 0 and null_sales_keys == 0 and neg_payments == 0)
-    all_passed &= p_f7
-    print(f"[{'PASS' if p_f7 else 'FAIL'}] F7. Kiểm tra miền giá trị và NULL:")
-    print(f"       * Giá trị âm (price/freight/payment): {neg_sales + neg_payments} (Kỳ vọng: 0)")
-    print(f"       * Khóa bắt buộc bị NULL: {null_sales_keys} (Kỳ vọng: 0)")
-
-    # ---------------------------------------------------------
-    # [F8] Kiểm tra KPI nghiệp vụ
-    # ---------------------------------------------------------
-    cur.execute("SELECT count(DISTINCT order_id), round(sum(total_payment_value), 2) FROM dw.fact_customer_order WHERE order_status = 'delivered';")
-    deliv_orders, deliv_revenue = cur.fetchone()
-
-    cur.execute("SELECT count(DISTINCT customer_key) FROM dw.fact_customer_order WHERE order_status = 'delivered';")
-    uniq_customers = cur.fetchone()[0]
-
-    p_f8 = (deliv_orders > 0 and deliv_revenue > 0 and uniq_customers > 0)
-    all_passed &= p_f8
-    print(f"[{'PASS' if p_f8 else 'FAIL'}] F8. Kiểm tra KPI nghiệp vụ (Chạy thử):")
-    print(f"       * Đơn hàng giao thành công (delivered): {deliv_orders:,} đơn")
-    print(f"       * Tổng doanh thu thanh toán delivered : {deliv_revenue:,.2f} R$")
-    print(f"       * Khách hàng mua hàng thành công      : {uniq_customers:,} khách duy nhất")
-
-    print("=" * 80)
-    if all_passed:
-        print("🏆 KẾT QUẢ NGHIỆM THU: TẤT CẢ 8 TRƯỜNG HỢP KIỂM TRA (F1 -> F8) ĐỀU ĐẠT CHUẨN XUẤT SẮC!")
-    else:
-        print("⚠️ CÓ TIÊU CHÍ CHƯA ĐẠT, VUI LÒNG KIỂM TRA LẠI DỮ LIỆU.")
-    print("=" * 80)
-    return all_passed
 
 def run_pipeline(rebuild_schema: bool = True):
     config = get_db_config()
-    mode_str = "TẠO LẠI SCHEMA (REBUILD THEO FIX.MD)" if rebuild_schema else "NẠP LẠI DỮ LIỆU (TRUNCATE & RELOAD)"
+    mode_str = "TẠO LẠI SCHEMA (REBUILD)" if rebuild_schema else "NẠP LẠI DỮ LIỆU (TRUNCATE & RELOAD)"
     print("=" * 80)
     print(f"🚀 BẮT ĐẦU PIPELINE NẠP DỮ LIỆU VÀO DATA WAREHOUSE: {config['database']}")
     print(f"   Chế độ: {mode_str}")
@@ -221,6 +98,7 @@ def run_pipeline(rebuild_schema: bool = True):
         print("[!] Không thể kết nối hoặc khởi tạo database. Vui lòng kiểm tra lại cấu hình .env!")
         sys.exit(1)
 
+    # Toàn bộ pipeline chạy trong MỘT giao dịch (DDL của PostgreSQL cũng có giao dịch): hợp lệ mới commit.
     conn = get_connection(autocommit=False)
     cur = conn.cursor()
 
@@ -234,7 +112,6 @@ def run_pipeline(rebuild_schema: bool = True):
             print("\n[Bước 1/6] Tạo schema 'staging' (01_schema.sql)...")
             schema_sql = read_sql_file(SQL_DIR / "staging" / "01_schema.sql")
             cur.execute(schema_sql)
-            conn.commit()
             print("  -> Schema 'staging' và các bảng cấu trúc đã tạo thành công.")
         else:
             print("\n[Bước 1/6] Schema staging đã có sẵn -> Làm sạch dữ liệu bảng raw...")
@@ -248,7 +125,6 @@ def run_pipeline(rebuild_schema: bool = True):
                     staging.raw_sellers,
                     staging.raw_category_translation;
             """)
-            conn.commit()
 
         # Bước 2: Nạp dữ liệu CSV vào bảng staging.raw_* bằng copy_expert
         print("\n[Bước 2/6] Nạp dữ liệu từ 7 file CSV vào bảng raw...")
@@ -264,7 +140,6 @@ def run_pipeline(rebuild_schema: bool = True):
                     f"COPY {table} FROM STDIN WITH (FORMAT csv, HEADER true, ENCODING 'UTF8')",
                     f
                 )
-            conn.commit()
             cur.execute(f"SELECT count(*) FROM {table}")
             cnt = cur.fetchone()[0]
             print(f"     Xong: {cnt:,} dòng ({time.time() - t0:.2f}s)")
@@ -274,7 +149,6 @@ def run_pipeline(rebuild_schema: bool = True):
         t0 = time.time()
         promote_sql = read_sql_file(SQL_DIR / "staging" / "03_promote.sql")
         cur.execute(promote_sql)
-        conn.commit()
         print(f"  -> Hoàn thành promote sang staging ({time.time() - t0:.2f}s)")
 
         # Bước 4: Kiểm tra dữ liệu staging
@@ -292,12 +166,11 @@ def run_pipeline(rebuild_schema: bool = True):
         for row in cur.fetchall():
             print(f"     * staging.stg_{row[0]:<20}: {row[1]:,}")
 
-        # Bước 5: Tạo schema kho dữ liệu dw theo Fix.md
+        # Bước 5: Tạo schema kho dữ liệu dw
         if rebuild_schema or not has_dw:
-            print("\n[Bước 5/6] Tạo schema 'dw' theo thiết kế Fix.md (dss.sql)...")
-            dw_schema_sql = read_sql_file(SQL_DIR / "dw" / "dss.sql")
+            print("\n[Bước 5/6] Tạo schema 'dw' (sql/dw/dw_schema.sql)...")
+            dw_schema_sql = read_sql_file(SQL_DIR / "dw" / "dw_schema.sql")
             cur.execute(dw_schema_sql)
-            conn.commit()
             print("  -> Schema 'dw' (dim_date, dim_customer, dim_product, dim_seller, fact_customer_order, fact_sales) đã tạo.")
         else:
             print("\n[Bước 5/6] Schema 'dw' đã có sẵn -> Làm sạch bảng DW...")
@@ -311,25 +184,25 @@ def run_pipeline(rebuild_schema: bool = True):
                     dw.dim_seller
                 CASCADE;
             """)
-            conn.commit()
 
         # Bước 6: Nạp dữ liệu vào kho hình sao dw (02_load.sql)
         print("\n[Bước 6/6] Nạp dữ liệu vào các bảng Dimension và Fact (02_load.sql)...")
         t0 = time.time()
         dw_load_sql = read_sql_file(SQL_DIR / "dw" / "02_load.sql")
         cur.execute(dw_load_sql)
-        conn.commit()
         print(f"  -> Nạp Dimension & Fact thành công ({time.time() - t0:.2f}s)")
 
-        # Chạy kiểm tra ràng buộc logic của 03_validate.sql (PL/pgSQL assertions)
-        print("\n[Kiểm tra tính toàn vẹn 03_validate.sql (PL/pgSQL)]...")
-        validate_sql = read_sql_file(SQL_DIR / "dw" / "03_validate.sql")
-        cur.execute(validate_sql)
-        conn.commit()
-        print("  -> Kiểm tra ràng buộc và assertion nội bộ thành công!")
-
-        # Chạy kiểm tra các trường hợp F1 -> F8
+        # Nghiệm thu: 03_validate.sql ném lỗi nếu sai (rollback ở except bên dưới)
         run_acceptance_tests(cur)
+
+        # Tạo lại view nguồn cho DSS (bước 5 đã DROP SCHEMA dw CASCADE nên view bị xóa theo).
+        # Đối soát view với fact_sales vẫn do run_dss_01.py làm.
+        print("\n[Hậu kỳ] Tạo view DSS dw.v_dss_monthly_demand (sql/dss/01_demand_mart.sql)...")
+        cur.execute(read_sql_file(SQL_DIR / "dss" / "01_demand_mart.sql"))
+
+        # Chỉ commit khi MỌI bước (nạp, nghiệm thu, view DSS) đều thành công; lỗi ở bất kỳ bước nào -> rollback toàn bộ.
+        conn.commit()
+        print("  -> View DSS đã tạo.")
 
         total_time = time.time() - start_total
         print(f"\n🎉 HOÀN TẤT PIPELINE VÀO '{config['database']}' TRONG {total_time:.2f} GIÂY!")
@@ -343,7 +216,7 @@ def run_pipeline(rebuild_schema: bool = True):
         conn.close()
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="ETL Pipeline nạp dữ liệu Olist vào Data Warehouse theo Fix.md")
+    parser = argparse.ArgumentParser(description="ETL Pipeline nạp dữ liệu Olist vào Data Warehouse")
     parser.add_argument("--reload-only", action="store_true", help="Chỉ nạp lại dữ liệu mà không tạo lại schema (mặc định là rebuild)")
     args = parser.parse_args()
 

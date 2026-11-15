@@ -1,4 +1,5 @@
 import { useQuery } from '@tanstack/react-query'
+import { ArrowRightIcon } from 'lucide-react'
 import { Link } from 'react-router-dom'
 import { Bar, BarChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts'
 import { PageHeading } from '../../../components/layouts'
@@ -40,7 +41,15 @@ export function OverviewPage() {
 
   return (
     <section className="space-y-3">
-      <PageHeading title="Tổng quan" />
+      <PageHeading
+        title="Tổng quan"
+        actions={
+          <Link to="/quyet-dinh" className={cn(buttonVariants({ size: 'sm' }))}>
+            Quyết định nhập hàng
+            <ArrowRightIcon />
+          </Link>
+        }
+      />
       <QueryState loading={overview.isLoading} error={overview.error}>
         {data && <Kpi data={data} />}
       </QueryState>
@@ -64,6 +73,7 @@ export function OverviewPage() {
                 canDrill={false}
                 onDrill={() => {}}
                 heightClass="h-44"
+                showGrowth={false}
               />
             </QueryState>
           </CardContent>
@@ -71,7 +81,7 @@ export function OverviewPage() {
 
         <Card className="xl:col-span-2">
           <CardHeader>
-            <CardTitle>Khu vực</CardTitle>
+            <CardTitle>Danh mục</CardTitle>
             <CardAction>
               <Link to="/hang-hoa" className={cn(buttonVariants({ variant: 'outline', size: 'sm' }))}>
                 Mở
@@ -149,14 +159,24 @@ export function OverviewPage() {
 function Kpi({ data }: { data: OverviewResponse }) {
   const sales = data.sales
   const payment = data.payment
-  const gap = data.reconciliation.payment_minus_price_and_freight
+  const customers = data.customers
   const freightShare = sales.product_sales ? (sales.freight_value / sales.product_sales) * 100 : null
+  const buyers = customers.one_time + customers.repeat_buyers
+  const repeatRate = buyers ? (customers.repeat_buyers / buyers) * 100 : null
   return (
     <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
-      <Stat label="Doanh thu hàng" value={money(sales.product_sales)} detail={`${count(sales.orders)} đơn`} />
-      <Stat label="Cước" value={money(sales.freight_value)} detail={freightShare == null ? undefined : pct(freightShare)} />
-      <Stat label="Thanh toán" value={money(payment.payment_value)} detail={`AOV ${money(payment.aov)}`} />
-      <Stat label="Lệch TT − (giá+cước)" value={money(gap)} detail={`${count(payment.customers)} khách`} />
+        <Stat label="Doanh thu hàng" value={`${money(sales.product_sales)} R$`} detail={`${count(sales.orders)} đơn đã giao`} />
+        <Stat label="Giá trị đơn trung bình" value={`${money(payment.aov)} R$`} detail="Đã gồm cước vận chuyển" />
+        <Stat
+          label="Khách hàng"
+          value={count(payment.customers)}
+          detail={repeatRate == null ? undefined : `${pct(repeatRate)} mua lại`}
+        />
+        <Stat
+          label="Cước vận chuyển"
+          value={`${money(sales.freight_value)} R$`}
+          detail={freightShare == null ? undefined : `${pct(freightShare)} so với doanh thu hàng`}
+        />
     </div>
   )
 }

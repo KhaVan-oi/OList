@@ -8,7 +8,9 @@ Ba chủ đề, chỉ đơn `delivered`. Ba thước đo tiền đứng riêng, 
 | Cước | `sum(freight_value)` trên `fact_sales` | 2.198.275,64 R$ |
 | Thanh toán | `sum(total_payment_value)` trên `fact_customer_order` | 15.422.461,77 R$ |
 
-Giá cộng cước là 15.419.773,75 R$. Thanh toán lệch 2.688,02 R$. Địa lý lấy trên đơn (`customer_state`, `customer_city`), không lấy từ `dim_customer`. Một đơn có thể nhiều danh mục và nhiều seller, nên không cộng cột đơn xuyên danh mục hoặc xuyên seller. Cộng đơn theo bang thì được, vì một đơn chỉ một bang. Năm 2016 và 2018 chưa đủ 12 tháng có giao dịch.
+Giá cộng cước là 15.419.773,75 R$. Thanh toán lệch 2.688,02 R$.
+
+**Tăng trưởng năm và quý luôn so cùng kỳ.** Dữ liệu delivered chỉ có 2016-09..2018-08 (thiếu 2016-11), nên tổng cả kỳ chia tổng cả kỳ trước sẽ trộn chênh lệch số tháng vào tăng trưởng (2018/2017 ra +21% thay vì +141% cùng kỳ). YoY chỉ cộng các tháng có ở cả hai năm; QoQ ghép tháng thứ k của quý với tháng thứ k của quý trước. Tổng của kỳ vẫn đầy đủ. Mã: `backend/app/features/sales_time/growth.py` và `sql/olap/01_sales_time.sql` phần 2 + 3. Lý do chi tiết: `docs/ra_soat_xu_ly_du_lieu.md`. Địa lý lấy trên đơn (`customer_state`, `customer_city`), không lấy từ `dim_customer`. Một đơn có thể nhiều danh mục và nhiều seller, nên không cộng cột đơn xuyên danh mục hoặc xuyên seller. Cộng đơn theo bang thì được, vì một đơn chỉ một bang. Năm 2016 và 2018 chưa đủ 12 tháng có giao dịch.
 
 RFM, K-Means và what-if nằm ở DSS, không thuộc ba file này. Kho không có điểm review, loại thanh toán, hay số ngày giao hàng trong schema sao.
 
@@ -34,8 +36,8 @@ Màn `/thoi-gian`. API `/api/sales-time/*` (alias `/api/olap/*`). Sáu chip: Kho
 |---|---|---|---|
 | 0 | Nền delivered | Tập nào được tính? | Không có chip. Mỗi câu tự lọc delivered |
 | 1 | Tổng theo tháng, MoM, YTD | Tháng này bán được bao nhiêu so với tháng trước, và từ đầu năm đến nay? | Tổng → Tháng |
-| 2 | Tổng theo quý, QoQ, YTD | Quý này hơn hay kém quý trước? | Tổng → Quý |
-| 3 | Tổng theo năm, YoY | Năm nay hơn năm trước bao nhiêu phần trăm? | Tổng → Năm |
+| 2 | Tổng theo quý, QoQ **cùng kỳ** | Quý này hơn hay kém quý trước? | Tổng → Quý. Cột số tháng có dữ liệu / số tháng so |
+| 3 | Tổng theo năm, YoY **cùng kỳ** | Năm nay hơn năm trước bao nhiêu phần trăm, trên cùng các tháng? | Tổng → Năm. 2018 (T1–T8) so với T1–T8/2017: +141,13% |
 | 4 | Cuộn tháng → quý → năm → tổng | Tổng một quý hoặc một năm là bao nhiêu khi không cộng tay từ dòng con? | Cuộn |
 | 5 | Khoan năm → quý → tháng → ngày | Ngày nào trong tháng đang xem tạo ra doanh thu? Cuối tuần có khác ngày thường không? | Khoan. Cuối tuần chỉ ở mức ngày |
 | 6 | Lát một năm, 12 tháng, MoM | Trong đúng một năm, tháng nào kéo doanh thu? | Lát |

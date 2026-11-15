@@ -3,7 +3,7 @@
 
 $envFile = Join-Path $PSScriptRoot ".env"
 $dbHost = "localhost"
-$dbPort = "5432"
+$dbPort = "5433"
 $dbName = "olist_dw"
 $dbUser = "postgres"
 $dbPass = ""

@@ -1,6 +1,7 @@
 import { BrowserRouter, Route, Routes } from 'react-router-dom'
 import { MainLayout } from './components/layouts'
 import { CustomerPaymentPage } from './features/customer-payment'
+import { DssPage } from './features/dss'
 import { OverviewPage } from './features/overview'
 import { ProductGeoPage } from './features/product-geo'
 import { SalesTimePage } from './features/sales-time'
@@ -18,6 +19,7 @@ export default function App() {
             <Route path="hang-hoa" element={<ProductGeoPage />} />
             <Route path="seller" element={<SellerPage />} />
             <Route path="khach" element={<CustomerPaymentPage />} />
+            <Route path="quyet-dinh" element={<DssPage />} />
           </Route>
         </Routes>
       </BrowserRouter>

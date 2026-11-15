@@ -60,6 +60,7 @@ export function TimeChart({
   canDrill,
   onDrill,
   heightClass = 'h-72',
+  showGrowth = true,
 }: {
   rows: Array<Row & { label: string }>
   operation: Operation
@@ -67,6 +68,8 @@ export function TimeChart({
   canDrill: boolean
   onDrill: (row: Row) => void
   heightClass?: string
+  /** false: chỉ vẽ cột, bỏ đường tăng trưởng (dùng cho biểu đồ thu nhỏ, hai trục khó đọc) */
+  showGrowth?: boolean
 }) {
   const kpiKey =
     activeKpi === 'sales' ? 'product_sales' : activeKpi === 'freight' ? 'freight_value' : 'order_item_count'
@@ -129,7 +132,8 @@ export function TimeChart({
 
   /* ── Timeanalysis: cột measure đang chọn + đường tăng trưởng của chính measure đó ── */
   const growthKey = growthKeyOf(rows[0], activeKpi)
-  const hasGrowth = growthKey != null && rows.some((r) => r[growthKey] != null)
+  const growthPoints = growthKey == null ? 0 : rows.filter((r) => r[growthKey] != null).length
+  const hasGrowth = showGrowth && growthKey != null && growthPoints > 0
 
   if (hasGrowth) {
     return (
@@ -153,7 +157,7 @@ export function TimeChart({
             dataKey={growthKey}
             name={GROWTH_NAME}
             stroke={chartFreight}
-            dot={false}
+            dot={growthPoints < 2 ? { r: 4 } : false}
             strokeWidth={2}
             connectNulls={false}
           />
