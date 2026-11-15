@@ -16,7 +16,12 @@ export function PlaceChart({
 }) {
   const tip = (value: unknown) => money(typeof value === 'number' ? value : Number(value))
   if (rows.length === 0) {
-    return <p className="flex h-72 items-center text-sm text-muted-foreground">Không có dòng.</p>
+    return (
+      <div className="flex h-72 flex-col items-center justify-center gap-2 text-sm text-muted-foreground">
+        <span className="text-2xl">📭</span>
+        <span>Không có dữ liệu cho bộ lọc đã chọn</span>
+      </div>
+    )
   }
   const height = Math.max(288, rows.length * 36)
   return (

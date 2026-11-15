@@ -758,6 +758,192 @@ def create_product_geo_blueprint(gateway: QueryGateway):
             return jsonify({"error": str(exc)}), 500
 
 
+    @bp.route("/api/product-geo/matrix", methods=["GET"])
+    def product_matrix():
+        """11. Ma trận hàng × năm (dạng dài). by=state|city|seller.
+
+        - state (mặc định): Bang × Năm
+        - city: Thành phố × Năm (cần state)
+        - seller: Top seller × Năm (limit)
+        year_from/year_to mặc định 2016-2018; quarter/category/states lọc thêm.
+        Ô không có giao dịch không xuất hiện (FE để trống, không gán 0).
+        """
+        by = (request.args.get("by") or "state").strip().lower()
+        if by not in ("state", "city", "seller"):
+            return jsonify({"error": "by phải là state, city hoặc seller"}), 400
+
+        year_from_raw = request.args.get("year_from", "2016")
+        year_to_raw = request.args.get("year_to", "2018")
+        try:
+            year_from = int(year_from_raw)
+            year_to = int(year_to_raw)
+        except ValueError:
+            return jsonify({"error": "year_from / year_to là số (2016-2018)"}), 400
+        if year_from < 2016 or year_to > 2018 or year_from > year_to:
+            return jsonify({"error": "year_from / year_to trong 2016-2018 và from ≤ to"}), 400
+
+        quarter_raw = request.args.get("quarter")
+        quarter = None
+        if quarter_raw not in (None, ""):
+            try:
+                quarter = int(quarter_raw)
+            except ValueError:
+                return jsonify({"error": "quarter là 1-4"}), 400
+            if quarter not in (1, 2, 3, 4):
+                return jsonify({"error": "quarter là 1-4"}), 400
+
+        category, error = _optional_category()
+        if error:
+            return jsonify({"error": error}), 400
+        state, error = _state()
+        if error:
+            return jsonify({"error": error}), 400
+        if by == "city" and not state:
+            return jsonify({"error": "by=city cần kèm state"}), 400
+        states, error = _optional_states()
+        if error:
+            return jsonify({"error": error}), 400
+        limit, error = _limit(10)
+        if error:
+            return jsonify({"error": error}), 400
+
+        # Matrix tự lát năm qua year_from/to; không dùng _VALID_SALES (đã gắn year request).
+        clauses = [
+            "o.order_status = 'delivered'",
+            "d.year BETWEEN %s AND %s",
+        ]
+        params: list = [year_from, year_to]
+        if quarter is not None:
+            clauses.append("d.quarter = %s")
+            params.append(quarter)
+
+        base_cte = f"""
+matrix_sales AS (
+    SELECT
+        s.price,
+        s.freight_value,
+        s.order_id,
+        coalesce(p.product_category_name_english, p.product_category_name, 'Unknown') AS category,
+        trim(sel.seller_id) AS seller_id,
+        o.customer_state,
+        o.customer_city,
+        d.year
+    FROM dw.fact_sales AS s
+    JOIN dw.fact_customer_order AS o ON o.order_id = s.order_id
+    JOIN dw.dim_product AS p ON p.product_key = s.product_key
+    JOIN dw.dim_seller AS sel ON sel.seller_key = s.seller_key
+    JOIN dw.dim_date AS d ON d.date_key = s.purchase_date_key
+    WHERE {" AND ".join(clauses)}
+)
+"""
+
+        try:
+            if by == "seller":
+                data = gateway.fetch_all(
+                    f"""
+                    WITH {base_cte},
+                    top_sellers AS (
+                        SELECT seller_id
+                        FROM matrix_sales
+                        WHERE (%s = '' OR category = %s)
+                          AND (cardinality(%s::text[]) = 0 OR customer_state = ANY(%s))
+                        GROUP BY seller_id
+                        ORDER BY sum(price) DESC, count(*) DESC, seller_id
+                        LIMIT %s
+                    ),
+                    cells AS (
+                        SELECT
+                            m.seller_id,
+                            m.year,
+                            round(sum(m.price), 2) AS revenue,
+                            round(sum(m.freight_value), 2) AS freight,
+                            count(*) AS items_sold,
+                            count(DISTINCT m.order_id) AS orders
+                        FROM matrix_sales AS m
+                        JOIN top_sellers AS t ON t.seller_id = m.seller_id
+                        WHERE (%s = '' OR m.category = %s)
+                          AND (cardinality(%s::text[]) = 0 OR m.customer_state = ANY(%s))
+                        GROUP BY m.seller_id, m.year
+                    )
+                    SELECT
+                        seller_id,
+                        year,
+                        revenue,
+                        freight,
+                        items_sold,
+                        orders
+                    FROM cells
+                    ORDER BY sum(revenue) OVER (PARTITION BY seller_id) DESC, seller_id, year
+                    """,
+                    tuple(params)
+                    + (category, category, states, states, limit, category, category, states, states),
+                )
+            elif by == "city":
+                data = gateway.fetch_all(
+                    f"""
+                    WITH {base_cte},
+                    cells AS (
+                        SELECT
+                            customer_state,
+                            coalesce(customer_city, '(NULL CITY)') AS customer_city,
+                            year,
+                            round(sum(price), 2) AS revenue,
+                            round(sum(freight_value), 2) AS freight,
+                            count(*) AS items_sold,
+                            count(DISTINCT order_id) AS orders
+                        FROM matrix_sales
+                        WHERE customer_state = %s
+                          AND (%s = '' OR category = %s)
+                        GROUP BY customer_state, customer_city, year
+                    )
+                    SELECT *
+                    FROM cells
+                    ORDER BY sum(revenue) OVER (PARTITION BY customer_city) DESC, customer_city, year
+                    """,
+                    tuple(params) + (state, category, category),
+                )
+            else:
+                data = gateway.fetch_all(
+                    f"""
+                    WITH {base_cte},
+                    cells AS (
+                        SELECT
+                            customer_state,
+                            year,
+                            round(sum(price), 2) AS revenue,
+                            round(sum(freight_value), 2) AS freight,
+                            count(*) AS items_sold,
+                            count(DISTINCT order_id) AS orders
+                        FROM matrix_sales
+                        WHERE customer_state IS NOT NULL
+                          AND (%s = '' OR customer_state = %s)
+                          AND (%s = '' OR category = %s)
+                        GROUP BY customer_state, year
+                    )
+                    SELECT *
+                    FROM cells
+                    ORDER BY sum(revenue) OVER (PARTITION BY customer_state) DESC, customer_state, year
+                    """,
+                    tuple(params) + (state, state, category, category),
+                )
+
+            return _ok(
+                "matrix",
+                data,
+                by=by,
+                year_from=year_from,
+                year_to=year_to,
+                quarter=quarter,
+                category=category or None,
+                state=state or None,
+                states=states or None,
+                limit=limit if by == "seller" else None,
+                note="Dạng dài hàng × năm. Ô trống = không có giao dịch trong kỳ lọc.",
+            )
+        except Exception as exc:
+            return jsonify({"error": str(exc)}), 500
+
+
     @bp.route("/api/product-geo", methods=["GET"])
     def product_geo_main():
         """Điều hướng theo operation, cùng vai trò với /api/olap của màn thời gian."""
@@ -774,6 +960,7 @@ def create_product_geo_blueprint(gateway: QueryGateway):
             "slice": product_slice,
             "dice": product_dice,
             "rank": product_rank,
+            "matrix": product_matrix,
             "periods": product_periods,
         }
         handler = handlers.get(operation)
@@ -795,6 +982,7 @@ def create_product_geo_blueprint(gateway: QueryGateway):
         ("/dice", product_dice),
         ("/periods", product_periods),
         ("/rank", product_rank),
+        ("/matrix", product_matrix),
         ("", product_geo_main),
     ):
         bp.add_url_rule(

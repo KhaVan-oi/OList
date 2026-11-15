@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
-import { TrendingUpIcon, BarChart2Icon, GridIcon } from 'lucide-react'
+import { BarChart2Icon, CalendarDaysIcon, GridIcon } from 'lucide-react'
 import { useSearchParams } from 'react-router-dom'
 import { PageHeading } from '../../../components/layouts'
 import { QueryState } from '../../../components/ui'
@@ -418,7 +418,9 @@ export function SalesTimePage() {
         <div className="flex justify-end">
           {!isDice ? (
             <div className={filterBarClass}>
-              <TrendingUpIcon className="ml-1 size-4 text-muted-foreground" />
+              <span className="inline-flex size-8 items-center justify-center text-muted-foreground" aria-hidden>
+                <CalendarDaysIcon className="size-4" />
+              </span>
 
               {/* Bộ lọc 1: Toàn kỳ / năm */}
               <FilterSelect
