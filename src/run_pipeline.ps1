@@ -1,7 +1,7 @@
 # Script PowerShell chay pipeline nap kho du lieu olist_dw
 # Su dung bien moi truong tu file .env neu co, hoac gia tri mac dinh
 
-$envFile = Join-Path $PSScriptRoot ".env"
+$envFile = Join-Path (Split-Path $PSScriptRoot -Parent) ".env"
 $dbHost = "localhost"
 $dbPort = "5433"
 $dbName = "olist_dw"

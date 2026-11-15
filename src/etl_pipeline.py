@@ -15,6 +15,7 @@ from db_connect import get_connection, ensure_database_exists, get_db_config
 
 
 BASE_DIR = Path(__file__).resolve().parent
+DATA_DIR = BASE_DIR.parent / "data"
 SQL_DIR = BASE_DIR / "sql"
 
 # Mapping table raw name -> CSV filename
@@ -129,7 +130,7 @@ def run_pipeline(rebuild_schema: bool = True):
         # Bước 2: Nạp dữ liệu CSV vào bảng staging.raw_* bằng copy_expert
         print("\n[Bước 2/6] Nạp dữ liệu từ 7 file CSV vào bảng raw...")
         for table, filename in RAW_TABLE_FILES:
-            csv_path = BASE_DIR / filename
+            csv_path = DATA_DIR / filename
             if not csv_path.exists():
                 raise FileNotFoundError(f"Không tìm thấy file: {csv_path}")
 

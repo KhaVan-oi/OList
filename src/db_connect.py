@@ -7,9 +7,9 @@ from psycopg2.extensions import ISOLATION_LEVEL_AUTOCOMMIT
 from sqlalchemy import create_engine, text
 import pandas as pd
 
-# Load environment variables from .env file in the current directory
+# Load environment variables from .env file in the project root
 BASE_DIR = Path(__file__).resolve().parent
-load_dotenv(BASE_DIR / ".env")
+load_dotenv(BASE_DIR.parent / ".env")
 
 def get_db_config(target_db: str | None = None) -> dict:
     """
